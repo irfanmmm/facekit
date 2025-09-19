@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import face_recognition as fr
 import cv2
 import numpy as np
@@ -5,12 +6,12 @@ from threading import Lock
 from model.database import get_database
 from sklearn.neighbors import KDTree
 
-
 # Global cache
 # KNOWN_IMAGES = []
 KNOWN_ENCODINGS = {}
 lock = Lock()
-
+today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+today_end = today_start + timedelta(days=1)
 class FaceAttendance:
     def __init__(self):
         # Load cache from DB on init
@@ -117,21 +118,45 @@ class FaceAttendance:
 
         if best_distance <= tolerance:
             emp = KNOWN_ENCODINGS[company_code][best_emp_id]
-            data =  {
+            db = get_database()
+            collection = db[f"log_{company_code}_{datetime.utcnow().strftime('%Y-%m')}"]
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start + timedelta(days=1)
+
+            emp_last_record = collection.find_one(
+                {"employee_id": best_emp_id, "timestamp": {"$gte": today_start, "$lt": today_end}},
+                sort=[("timestamp", -1)]  # latest first
+            )
+
+            # Determine direction
+            if emp_last_record is None:
+                direction = "in"   # first punch of the day
+            elif emp_last_record["direction"] == "in":
+                direction = "out"  # alternate
+            else:
+                direction = "in"   # next punch after out
+
+            # Insert new attendance record
+            record = {
                 "employee_id": best_emp_id,
                 "fullname": emp["fullname"],
                 "company_code": company_code,
                 "distance": float(best_distance),
-                "direction": "in" if best_distance < 0.4 else "out",
+                "direction": direction,
+                "timestamp": datetime.utcnow()
+            }
+            collection.insert_one(record)
+
+            data = {
+                "employee_id": best_emp_id,
+                "fullname": emp["fullname"],
+                "company_code": company_code,
+                "distance": float(best_distance),
+                "direction": direction,
                 "timestamp": str(np.datetime64('now'))
             }
 
-
-
-
             return data
-
-        return False
 
     def load_all_faces(self):
         """Load all encodings from DB into memory cache."""
@@ -160,3 +185,49 @@ class FaceAttendance:
             return False
 
 # shaduler for marking attandance
+# def add_attendance_record(company_code, best_emp_id, best_distance, tolerance=0.6):
+#     if best_distance > tolerance:
+#         return False
+    
+#     emp = KNOWN_ENCODINGS[company_code][best_emp_id]
+    
+#     data = {
+#         "employee_id": best_emp_id,
+#         "fullname": emp["fullname"],
+#         "distance": float(best_distance),
+#         "direction": "in" if best_distance < 0.4 else "out",
+#         "timestamp": datetime.utcnow()
+#     }
+    
+#     month_str = datetime.utcnow().strftime("%Y-%m")
+    
+#     # collection.update_one(
+#     #     {"company_code": company_code, "month": month_str},
+#     #     {"$push": {"records": data}},
+#     #     upsert=True
+#     # )
+    
+#     # print(f"Attendance added: {data}")
+#     return data
+
+# # Example function to check faces and add attendance
+# def check_faces_and_add_attendance():
+#     print("Checked faces and updated attendance.")
+#     db = get_database()
+#     month_str = datetime.utcnow().strftime("%Y-%m")
+#     print(KNOWN_ENCODINGS)
+#     print(month_str)
+#     for company_code in KNOWN_ENCODINGS.keys():
+#         collection_name = f"log_{company_code}_{month_str}"
+#         attendance_log_collection = db[collection_name]
+#         print(f"Using collection: {attendance_log_collection}")
+#         # Example: attendance_log_collection.update_one(...)
+#     # attendance_log_collection = db[f"attendance_log_{month_str}_{}"]
+
+
+#     return
+
+# # Scheduler setup
+# scheduler = BackgroundScheduler()
+# scheduler.add_job(check_faces_and_add_attendance, 'interval', seconds=10)  # every 1 sec
+# scheduler.start()
