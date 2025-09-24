@@ -2,10 +2,7 @@ from flask import Flask, request, jsonify
 from face_match.face_ml import FaceAttendance
 from model.compony_model import ComponyModel
 from helper.trigger_mail import send_mail_with_template
-import requests as http
-import sv_ttk
-import tkinter
-from tkinter import ttk
+
 
 app = Flask(__name__)
 
