@@ -5,13 +5,13 @@ import numpy as np
 from threading import Lock
 from model.database import get_database
 from sklearn.neighbors import KDTree
+# import traceback
 
 # Global cache
-# KNOWN_IMAGES = []
 KNOWN_ENCODINGS = {}
 lock = Lock()
-today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-today_end = today_start + timedelta(days=1)
+
+
 class FaceAttendance:
     def __init__(self):
         # Load cache from DB on init
@@ -21,6 +21,7 @@ class FaceAttendance:
 
     def build_tree(self, company_code):
         """Build KDTree for a company"""
+        
         employees = KNOWN_ENCODINGS.get(company_code, {})
         if not employees:
             return
@@ -43,6 +44,7 @@ class FaceAttendance:
 
             face_locations = fr.face_locations(image, model="hog")
             if not face_locations:
+                print("No face detected")
                 return False
             encoding = fr.face_encodings(image, face_locations)[0]
 
@@ -89,59 +91,143 @@ class FaceAttendance:
             return False
 
 
-    def compare_faces(self, base_img, company_code, tolerance=0.45):
+    def compare_faces(self, base_img, company_code, tolerance=0.45, resize_factor=0.25, model="hog"):
+        """
+        Compare a face with known encodings and log attendance.
+        Returns a dict with success=True and data on match, or success=False and reason.
+        """
         try:
-            # ✅ Resize for speed
-            image = fr.load_image_file(base_img)
-            small_img = cv2.resize(image, (0, 0), fx=0.2, fy=0.2)
+            # --------- 1) Load image (support FileStorage, bytes, ndarray, path) ----------
+            image = None
 
-            face_locations = fr.face_locations(small_img, model="hog")
+            if hasattr(base_img, "read"):  # Flask FileStorage or file-like
+                file_bytes = np.frombuffer(base_img.read(), np.uint8)
+                base_img.seek(0)
+                bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                if bgr is None:
+                    return {"success": False, "reason": "imdecode_failed"}
+                image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+            elif isinstance(base_img, (bytes, bytearray)):
+                file_bytes = np.frombuffer(base_img, np.uint8)
+                bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                if bgr is None:
+                    return {"success": False, "reason": "imdecode_failed"}
+                image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+            elif isinstance(base_img, np.ndarray):
+                # Assume it's already an image. face_recognition expects RGB.
+                image = base_img
+                # If it looks like BGR (common from cv2), optionally convert.
+                # We won't auto-convert to avoid wrong conversions; user can pass RGB.
+                if image.ndim == 3 and image.shape[2] == 3:
+                    # Heuristic: if the mean of blue channel is much larger than red,
+                    # it might be BGR — convert to RGB.
+                    if np.mean(image[:, :, 0]) - np.mean(image[:, :, 2]) > 25:
+                        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            else:
+                # Let face_recognition handle paths or file-like objects if given
+                try:
+                    image = fr.load_image_file(base_img)  # returns RGB numpy array
+                except Exception as e:
+                    return False
+            if image is None:
+                return False
+            # --------- 2) Resize for speed (preserve aspect) ----------
+            h, w = image.shape[:2]
+            if resize_factor and 0 < resize_factor < 1.0:
+                new_w = max(1, int(w * resize_factor))
+                new_h = max(1, int(h * resize_factor))
+                small_img = cv2.resize(image, (new_w, new_h))
+            else:
+                small_img = image
+
+            # --------- 3) Face detection + encoding ----------
+            face_locations = fr.face_locations(small_img, model=model)
             if not face_locations:
                 return False
 
-            test_encoding = fr.face_encodings(small_img, face_locations)[0]
+            encodings = fr.face_encodings(small_img, face_locations, num_jitters=1)
+            if not encodings:
+                return False
+
+            test_encoding = np.asarray(encodings[0], dtype=np.float32).reshape(1, -1)
+
         except Exception as e:
-            print(f"Encoding error: {e}")
+            print("Encoding Exception:", e)
+            # print(traceback.format_exc())
+            return False
+        # --------- 4) Ensure KDTree exists and is compatible ----------
+        if company_code not in self.trees or self.trees.get(company_code) is None:
+            try:
+                self.build_tree(company_code)
+            except Exception as e:
+                print("build_tree error:", e)
+                # print(traceback.format_exc())
+
+        if company_code not in self.trees or self.trees.get(company_code) is None:
             return False
 
-        # ✅ Make sure KDTree exists
-        if company_code not in self.trees:
-            self.build_tree(company_code)
+        tree = self.trees[company_code]
+        emp_map = self.emp_maps.get(company_code, [])
 
-        if company_code not in self.trees:
+        try:
+            # Validate dimensionality
+            if hasattr(tree, 'data'):
+                tree_dim = tree.data.shape[1]
+                if test_encoding.shape[1] != tree_dim:
+                    return False
+        except Exception:
+            # some KDTree wrappers may not expose .data; skip if so
+            pass
+
+        # --------- 5) Query nearest neighbor ----------
+        try:
+            dist, ind = tree.query(test_encoding, k=1)
+            best_distance = float(dist[0][0])
+            idx = int(ind[0][0])
+        except Exception as e:
+            print("KDTree query error:", e)
+            # print(traceback.format_exc())
             return False
 
-        # ✅ Query nearest neighbor
-        dist, ind = self.trees[company_code].query([test_encoding], k=1)
-        best_distance = dist[0][0]
-        best_emp_id = self.emp_maps[company_code][ind[0][0]]
+        # Check emp_map bounds
+        if idx < 0 or idx >= len(emp_map):
+            return False
 
+        best_emp_id = emp_map[idx]
+
+        # --------- 6) Match decision and attendance logging ----------
         if best_distance <= tolerance:
-            emp = KNOWN_ENCODINGS[company_code][best_emp_id]
+            emp = KNOWN_ENCODINGS.get(company_code, {}).get(best_emp_id)
+            if emp is None:
+                return False
+
             db = get_database()
-            collection = db[f"log_{company_code}_{datetime.utcnow().strftime('%Y-%m')}"]
+            collection_name = f"log_{company_code}_{datetime.utcnow().strftime('%Y-%m')}"
+            collection = db[collection_name]
+
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
             today_end = today_start + timedelta(days=1)
 
             emp_last_record = collection.find_one(
                 {"employee_id": best_emp_id, "timestamp": {"$gte": today_start, "$lt": today_end}},
-                sort=[("timestamp", -1)]  # latest first
+                sort=[("timestamp", -1)]
             )
 
-            # Determine direction
             if emp_last_record is None:
-                direction = "in"   # first punch of the day
-            elif emp_last_record["direction"] == "in":
-                direction = "out"  # alternate
+                direction = "in"
+            elif emp_last_record.get("direction") == "in":
+                direction = "out"
             else:
-                direction = "in"   # next punch after out
+                direction = "in"
 
-            # Insert new attendance record
             record = {
                 "employee_id": best_emp_id,
-                "fullname": emp["fullname"],
+                "fullname": emp.get("fullname"),
                 "company_code": company_code,
-                "distance": float(best_distance),
+                "distance": best_distance,
                 "direction": direction,
                 "timestamp": datetime.utcnow()
             }
@@ -149,14 +235,16 @@ class FaceAttendance:
 
             data = {
                 "employee_id": best_emp_id,
-                "fullname": emp["fullname"],
+                "fullname": emp.get("fullname"),
                 "company_code": company_code,
-                "distance": float(best_distance),
+                "distance": best_distance,
                 "direction": direction,
-                "timestamp": str(np.datetime64('now'))
+                "timestamp": datetime.utcnow().isoformat() + "Z"
             }
-
             return data
+
+        # No good match
+        return False
 
     def load_all_faces(self):
         """Load all encodings from DB into memory cache."""
@@ -183,51 +271,3 @@ class FaceAttendance:
         except Exception as e:
             print(f"DB Load Error: {e}")
             return False
-
-# shaduler for marking attandance
-# def add_attendance_record(company_code, best_emp_id, best_distance, tolerance=0.6):
-#     if best_distance > tolerance:
-#         return False
-    
-#     emp = KNOWN_ENCODINGS[company_code][best_emp_id]
-    
-#     data = {
-#         "employee_id": best_emp_id,
-#         "fullname": emp["fullname"],
-#         "distance": float(best_distance),
-#         "direction": "in" if best_distance < 0.4 else "out",
-#         "timestamp": datetime.utcnow()
-#     }
-    
-#     month_str = datetime.utcnow().strftime("%Y-%m")
-    
-#     # collection.update_one(
-#     #     {"company_code": company_code, "month": month_str},
-#     #     {"$push": {"records": data}},
-#     #     upsert=True
-#     # )
-    
-#     # print(f"Attendance added: {data}")
-#     return data
-
-# # Example function to check faces and add attendance
-# def check_faces_and_add_attendance():
-#     print("Checked faces and updated attendance.")
-#     db = get_database()
-#     month_str = datetime.utcnow().strftime("%Y-%m")
-#     print(KNOWN_ENCODINGS)
-#     print(month_str)
-#     for company_code in KNOWN_ENCODINGS.keys():
-#         collection_name = f"log_{company_code}_{month_str}"
-#         attendance_log_collection = db[collection_name]
-#         print(f"Using collection: {attendance_log_collection}")
-#         # Example: attendance_log_collection.update_one(...)
-#     # attendance_log_collection = db[f"attendance_log_{month_str}_{}"]
-
-
-#     return
-
-# # Scheduler setup
-# scheduler = BackgroundScheduler()
-# scheduler.add_job(check_faces_and_add_attendance, 'interval', seconds=10)  # every 1 sec
-# scheduler.start()

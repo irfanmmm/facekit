@@ -3,6 +3,9 @@ from face_match.face_ml import FaceAttendance
 from model.compony_model import ComponyModel
 from helper.trigger_mail import send_mail_with_template
 import requests as http
+import sv_ttk
+import tkinter
+from tkinter import ttk
 
 app = Flask(__name__)
 
@@ -50,10 +53,6 @@ def verify_compony_code():
     compony_code = data.get("code")
     if not compony_code:
         return jsonify({"message": "compony code is requerd"})
-    
-    # response = http.post(f"{OFFICE_KIT_PRIMERY_URL}?OfficeContent={{'ApiKey':'{OFFICE_KIT_API_KEY}','CompanyCode':'{compony_code}'}}")
-
-    # if response['status'] == 'success':
     message = componyCode._verify(compony_code)
     if message == "success":
         return jsonify({"message": message})
@@ -88,7 +87,7 @@ def add_employee_face():
         if not all([fullname, employeecode,compony_code]):
             return jsonify({"error": "Missing required fields"})
         
-        status = attendance.update_face(employee_code=employeecode,add_img=file,compony_code=compony_code,fullname=fullname)
+        status = attendance.update_face(employee_code=employeecode,add_img=file,company_code=compony_code,fullname=fullname)
         if status:
             return jsonify({"message": "success"})
         return jsonify({"message": "Faild"})
@@ -101,124 +100,80 @@ def comare_face():
         file = request.files.get('file')
         data = request.form
         compony_code = data.get('compony_code')
+        if not compony_code:
+            return jsonify({"message": "compony_code is requerd"})
         match = attendance.compare_faces(file,compony_code)
         if match:
             return jsonify({"message": "success","details":match})
         return jsonify({"message": "Faild"})
     return jsonify({"message": "file is missing"})
 
+@app.route("/logs", methods=['POST'])
+def get_logs():
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    compony_code = data.get("compony_code")
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    from_date = data.get("from_date")
+    to_date = data.get("to_date")
+    page = data.get("page")
+    limit = data.get("limit")
+    counts, data = attendance.get_logs(compony_code,from_date, to_date,page=page,limit=limit)
+    return jsonify({"message": "success", "counts": counts, "data": data})
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# @app.route('/face_match', methods=['POST'])
-# def face_match():
-#     if 'file1' in request.files:
-#         file1 = request.files.get('file1')
-#         response = attendance.compare_faces(file1)
-#         if response:
-#             pass
-#             # update_attendance(response, file1.filename)
-#         return jsonify({"status": response})
-#     return jsonify({"status": "No file provided"})
-
-
-
-
-
-
-# @app.route('/add_face', methods=['POST'])
-# def add_face():
-#     if 'file1' in request.files:
-#         file1 = request.files.get('file1')
-#         img_name = file1.filename.split(".")[0]
-#         response = attendance.update_face(img_name, file1)
-#         return jsonify({"status": response})
-#     return jsonify({"status": "No file provided"})
-
-# # @app.route("/verify-compony-code",methods=['POST'])
-# # def verify_code():
-# #     data = request.get_json()
-# #     if not data:
-# #         return jsonify({"error": "No JSON body received"}), 400
-    
-# #     code = data.get("code")  # get value of 'code'
-
-# #     officeContent = {
-# #         "ApiKey": OFFICE_KIT_API_KEY,
-# #         "CompanyCode": code,
-# #     }
-
-# #     response = http.post(f"http://appteam.officekithr.net/api/AjaxAPI/MobileUrl?OfficeContent={officeContent}")
-
-# #     return jsonify(response.json())
-
-# # @app.route("/verify-admin",methods=['POST'])
-# # def verify_admin():
-# #     data = request.get_json()
-# #     if not data:
-# #         return jsonify({"error": "No JSON body received"}), 400
-    
-# #     username = data.get("username") 
-# #     password = data.get("password")
-
-# #     # verify admin usign db
-# #     return jsonify({"username":username, "password":password})
-
-# @app.route("/add-employee",methods=['POST'])
-# def add_employee():
-#     data = request.get_json()
-#     if not data:
-#         return jsonify({"error": "No JSON body received"}), 400
-    
-#     fullname = data.get("fullname") 
-#     employeecode = data.get("employeecode")
-
-#     # verify admin usign db
-#     return jsonify({"fullname":fullname, "employeecode":employeecode})
+@app.route("/")
 
 @app.route('/')
 def home():
     return 'AttendEase APP API'
+
+# import face_recognition
+# import cv2
+# import numpy as np
+
+# # Load known faces and their encodings (from your training phase)
+# known_face_encodings = []
+# known_face_names = []
+
+# # Example: Load a known face
+# image_of_person1 = face_recognition.load_image_file("irfan.jpeg")
+# person1_face_encoding = face_recognition.face_encodings(image_of_person1)[0]
+# known_face_encodings.append(person1_face_encoding)
+# known_face_names.append("Irfan")
+
+# # Initialize webcam
+# video_capture = cv2.VideoCapture(0)
+
+# while True:
+#     ret, frame = video_capture.read()
+#     if not ret:
+#         break
+
+#     # Find all the faces and face encodings in the current frame
+#     face_locations = face_recognition.face_locations(frame)
+#     face_encodings = face_recognition.face_encodings(frame, face_locations)
+
+#     for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+#         matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+#         name = "Unknown"
+
+#         if True in matches:
+#             first_match_index = matches.index(True)
+#             name = known_face_names[first_match_index]
+
+#         # Draw a box around the face and label it
+#         cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+#         cv2.putText(frame, name, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.8, (255, 255, 255), 1)
+
+#     cv2.imshow('Video', frame)
+
+#     if cv2.waitKey(1) & 0xFF == ord('q'):
+#         break
+
+# video_capture.release()
+# cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     app.run(debug=True, port=5001, host="0.0.0.0")
