@@ -36,56 +36,66 @@ class FaceAttendance:
             self.trees[company_code] = KDTree(encodings)
             self.emp_maps[company_code] = emp_ids
 
-    def update_face(self, employee_code, add_img, compony_code, fullname):
+    def update_face(self, employee_code, add_img, company_code, fullname):
+        """Add or update a face encoding for an employee"""
         try:
-            # Load full-resolution image for accurate encoding
-            image = fr.load_image_file(add_img)
-            # small_img = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
+            # ✅ Handle Flask FileStorage or file path
+            if hasattr(add_img, "read"):  
+                file_bytes = np.frombuffer(add_img.read(), np.uint8)
+                image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                add_img.seek(0)  
+            else:  
+                image = cv2.imread(str(add_img))
 
-            face_locations = fr.face_locations(image, model="hog")
-            if not face_locations:
-                print("No face detected")
+            if image is None:
+                print("Image not found or unreadable")
                 return False
-            encoding = fr.face_encodings(image, face_locations)[0]
 
-            # # check if same user face exists
-            # for emp in KNOWN_ENCODINGS.get(compony_code, {}).values():
-            #     print(emp)
+            # Resize (only if very large)
+            if image.shape[0] > 800 or image.shape[1] > 800:
+                image = cv2.resize(image, (800, 800))
 
-            # matches = fr.compare_faces([np.array(emp["encodings"], dtype=np.float32) for emp in KNOWN_ENCODINGS.get(compony_code, {}).values()], encoding, tolerance=0.4)
-            # if matches and True in matches:
-            #     return False
+            # Convert BGR → RGB
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
+            # Detect face(s)
+            face_locations = fr.face_locations(rgb_image, model="hog")
+            if len(face_locations) != 1:
+                print("No face or multiple faces detected")
+                return False
 
+            # ✅ Extract encoding and convert to list of floats
+            encoding = fr.face_encodings(rgb_image, face_locations, num_jitters=2)[0]
+            encoding_list = [float(x) for x in encoding]
 
-
-            encoding_list = encoding.tolist()
-
-
-            # Save in DB
+            # ✅ Save to DB (always safe for JSON)
             db = get_database()
-            collection = db[f"encodings_{compony_code}"]
+            collection = db[f"encodings_{company_code}"]
             collection.update_one(
                 {"employee_code": employee_code},
                 {"$set": {
-                    "company_code": compony_code,
+                    "company_code": company_code,
                     "employee_code": employee_code,
                     "fullname": fullname,
-                    "encoding": encoding_list
+                    "encodings": encoding_list
                 }},
                 upsert=True
             )
-            # Update in-memory cache
-            with lock:
-                if compony_code not in KNOWN_ENCODINGS:
-                    KNOWN_ENCODINGS[compony_code] = {}
 
-                KNOWN_ENCODINGS[compony_code][employee_code] = {
+            # ✅ Update in-memory cache
+            with lock:
+                if company_code not in KNOWN_ENCODINGS:
+                    KNOWN_ENCODINGS[company_code] = {}
+                KNOWN_ENCODINGS[company_code][employee_code] = {
                     "fullname": fullname,
                     "encodings": encoding_list
                 }
 
+            # ✅ Rebuild KDTree
+            self.build_tree(company_code)
+
             return True
+
         except Exception as e:
             print(f"Error updating face: {e}")
             return False
