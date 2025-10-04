@@ -1,8 +1,9 @@
+import json
 from flask import Flask, request, jsonify
-from face_match.face_ml import FaceAttendance
+from face_match.face_ml import FaceAttendance, job
 from model.compony_model import ComponyModel
+from model.user_model import UserModel
 from helper.trigger_mail import send_mail_with_template
-
 
 app = Flask(__name__)
 
@@ -13,6 +14,7 @@ OFFICE_KIT_PRIMERY_URL="http://appteam.officekithr.net/api/AjaxAPI/MobileUrl"
 
 attendance = FaceAttendance()  # initialize once
 componyCode = ComponyModel()  # initialize once
+userdetails = UserModel()
 
 
 """ Register user """
@@ -105,6 +107,87 @@ def comare_face():
         return jsonify({"message": "Faild"})
     return jsonify({"message": "file is missing"})
 
+@app.route("/all-employees",methods=['POST'])
+def all_employees():
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    compony_code = data.get('compony_code')
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    data = userdetails.get_all_users(compony_code=compony_code)
+    return jsonify({"message": "success", "data":data})
+
+@app.route("/attandance-report",methods=['POST'])
+def attandance_report():
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    compony_code = data.get('compony_code')
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    employee_code = data.get('employee_code')
+    if not employee_code:
+        return jsonify({"message": "employee_code is requerd"})
+    
+    starting_date = data.get('starting_date')
+    if not starting_date:
+        return jsonify({"message": "starting_date is requerd"})
+    
+    ending_date = data.get('ending_date')
+    if not ending_date:
+        return jsonify({"message": "ending_date is requerd"})
+
+    print(data, '********')
+    data = userdetails.get_attandance_report(compony_code=compony_code,employee_code=employee_code, starting_date=starting_date, ending_date=ending_date)
+    return jsonify({"message": "success","data": data})
+
+@app.route("/edit-attandance",methods=['POST'])
+def edit_attandance():
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    compony_code = data.get('compony_code')
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    # employee_code = data.get('employee_code')
+
+    """ [{'employee_id':'1','action':'P' | 'PL' | 'UL' | 'H'}] """
+    editable_details = data.get("editable_details")
+    if not editable_details:
+        return jsonify({"message": "editable_details is requerd"})
+    
+    editad_date = data.get("editad_date")
+    if not editad_date:
+        return jsonify({"message": "editad_date is requerd"})
+
+    message = userdetails.edit_attandance_report(compony_code=compony_code,emploee_list_with_action=editable_details,editad_date=editad_date)
+    if message:
+        return jsonify({"message": message})
+    return jsonify({"message": "Faild"})
+
+
+@app.route("/edit-user",methods=['POST'])
+def edit_user():
+    data = request.form
+    compony_code = data.get("compony_code")
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    editable_details_raw = data.get("editable_details")
+    editable_details = json.loads(editable_details_raw) if editable_details_raw else []
+    editable_details_files = []
+    for i, emp in enumerate(editable_details):
+        editable_details_files.append({
+            "employee_id":emp['employee_id'],
+            "action":emp['action'],
+            "full_name": emp['full_name'] if emp['full_name'] else None,
+            "file": request.files.get(f"file_{i}") if request.files.get(f"file_{i}") else None
+        })
+    
+    message = userdetails.edit_user_details(compony_code, editable_details_files)
+    return jsonify({"message": message})
+
+
 @app.route("/logs", methods=['POST'])
 def get_logs():
     data = request.get_json()
@@ -120,57 +203,21 @@ def get_logs():
     counts, data = attendance.get_logs(compony_code,from_date, to_date,page=page,limit=limit)
     return jsonify({"message": "success", "counts": counts, "data": data})
 
-@app.route("/")
 
 @app.route('/')
 def home():
     return 'AttendEase APP API'
 
-# import face_recognition
-# import cv2
-# import numpy as np
+import schedule
+import time, threading
 
-# # Load known faces and their encodings (from your training phase)
-# known_face_encodings = []
-# known_face_names = []
+def run_scheduler():
+    schedule.every(1).hours.do(job)
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
-# # Example: Load a known face
-# image_of_person1 = face_recognition.load_image_file("irfan.jpeg")
-# person1_face_encoding = face_recognition.face_encodings(image_of_person1)[0]
-# known_face_encodings.append(person1_face_encoding)
-# known_face_names.append("Irfan")
-
-# # Initialize webcam
-# video_capture = cv2.VideoCapture(0)
-
-# while True:
-#     ret, frame = video_capture.read()
-#     if not ret:
-#         break
-
-#     # Find all the faces and face encodings in the current frame
-#     face_locations = face_recognition.face_locations(frame)
-#     face_encodings = face_recognition.face_encodings(frame, face_locations)
-
-#     for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-#         matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-#         name = "Unknown"
-
-#         if True in matches:
-#             first_match_index = matches.index(True)
-#             name = known_face_names[first_match_index]
-
-#         # Draw a box around the face and label it
-#         cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-#         cv2.putText(frame, name, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 0.8, (255, 255, 255), 1)
-
-#     cv2.imshow('Video', frame)
-
-#     if cv2.waitKey(1) & 0xFF == ord('q'):
-#         break
-
-# video_capture.release()
-# cv2.destroyAllWindows()
+threading.Thread(target=run_scheduler, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(debug=True, port=5001, host="0.0.0.0")
