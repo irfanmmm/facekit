@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify
 from face_match.face_ml import FaceAttendance, job
 from model.compony_model import ComponyModel
 from model.user_model import UserModel
-from helper.trigger_mail import send_mail_with_template
+from helper.trigger_mail import send_mail_with_template ,verify_email_smtp
 
 app = Flask(__name__)
 
@@ -36,7 +36,7 @@ def sighnup():
     message,company_code = componyCode._set(compony_name,_name,email,password,mobile_no,emp_count)
     if message == "faild":
         return jsonify({"message": company_code})
-    status = send_mail_with_template(email,email,password,company_code,'')
+    status = send_mail_with_template(email,_name,password,company_code,'')
     if status: 
         return jsonify({"message": message})
     else:
@@ -68,7 +68,7 @@ def verify_admin():
     password = data.get("password")
     compony_code = data.get("compony_code")
 
-    if not all([username,password]):
+    if not all([username,password,compony_code]):
         return jsonify({"message": "Missing required fields"})
     
     message = componyCode._verify_admin(compony_code,username,password)
@@ -138,8 +138,23 @@ def attandance_report():
     if not ending_date:
         return jsonify({"message": "ending_date is requerd"})
 
-    print(data, '********')
     data = userdetails.get_attandance_report(compony_code=compony_code,employee_code=employee_code, starting_date=starting_date, ending_date=ending_date)
+    return jsonify({"message": "success","data": data})
+
+@app.route("/attandance-report-all",methods=['POST'])
+def attandance_report_all():
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    compony_code = data.get('compony_code')
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    
+    date = data.get("date")
+    if not date:
+        return jsonify({"message": "date is requerd"})
+
+    data = userdetails.get_attandance_report_all(compony_code=compony_code,date=date)
     return jsonify({"message": "success","data": data})
 
 @app.route("/edit-attandance",methods=['POST'])
@@ -157,7 +172,7 @@ def edit_attandance():
     if not editable_details:
         return jsonify({"message": "editable_details is requerd"})
     
-    editad_date = data.get("editad_date")
+    editad_date = data.get("date")
     if not editad_date:
         return jsonify({"message": "editad_date is requerd"})
 
@@ -183,9 +198,10 @@ def edit_user():
             "full_name": emp['full_name'] if emp['full_name'] else None,
             "file": request.files.get(f"file_{i}") if request.files.get(f"file_{i}") else None
         })
-    
-    message = userdetails.edit_user_details(compony_code, editable_details_files)
-    return jsonify({"message": message})
+    if editable_details_files:
+        message = userdetails.edit_user_details(compony_code, editable_details_files)
+        return jsonify({"message": message})
+    return jsonify({"message": "Faild"})
 
 
 @app.route("/logs", methods=['POST'])

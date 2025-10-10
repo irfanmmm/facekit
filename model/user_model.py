@@ -30,26 +30,36 @@ class UserModel():
             return "editable_details must be a non-empty list"
         for details in editable_details:
             try:
-                if available_actions not in details['action']:
+                if  details['action']  not in available_actions:
                     return "action not available"
 
                 if details['action'] == 'E':
-                    required_fields = ['employee_id', 'full_name', 'file']
-                    missing_fields = [f for f in required_fields if not details.get(f)]
-                    if missing_fields:
-                        return f"Missing fields: {', '.join(missing_fields)}"
-                    # if not all(details['employee_id'], details['full_name'], details['file']):
-                    #     return "full detials not available"
+                    if not details['employee_id']:
+                        return "employee_id not available"
                     
-                    face_details = FaceAttendance()
-                    status = face_details.update_face(
-                        details['employee_id'],
-                        details['file'],
-                        compony_code,
-                        details['full_name'],
-                    )
-                    if status:
-                        return "Faild"
+                    if details['file']:
+                        face_details = FaceAttendance()
+                        status = face_details.update_face(
+                            details['employee_id'],
+                            details['file'],
+                            compony_code,
+                            details['full_name'],
+                        )
+                        if status:
+                            return "success"
+                        return "Faile"
+                    else:
+                        colloction = self.db[f"encodings_{compony_code}"]
+                        colloction.update_one(
+                            {"employee_code": details['employee_id']},
+                            {"$set": {
+                                "company_code": compony_code,
+                                "employee_code": details['employee_id'],
+                                "fullname": details['full_name'],
+                            }},
+                            upsert=True
+                        )
+                        return "success"
                     
                 elif details['action'] == 'D':
                     colloction = self.db[f"encodings_{compony_code}"]
@@ -58,7 +68,7 @@ class UserModel():
                     }
                     result  = colloction.delete_one(_filter)
                     if result.deleted_count > 0:
-                        pass
+                        return "success"
                     else:
                         return "Employee not found for deletion"
             except Exception as e:
@@ -69,11 +79,10 @@ class UserModel():
     
     def edit_attandance_report(self, compony_code,emploee_list_with_action,editad_date):
         """ [{'employee_id':'1','action':'P' | 'PL' | 'UL' | 'H'}] """
-        # action
 
         remarks = ['P' , 'PL' ,'UL' , 'H']
         for emploee_dict in emploee_list_with_action:
-            if remarks not in emploee_dict['action']:
+            if emploee_dict['action'] not in remarks:
                 return "action not available"
             colloction = self.db[f"attandance_{compony_code}_{datetime.utcnow().strftime('%Y-%m')}"]
             starting_at=datetime.strptime(editad_date, "%Y-%m-%d")
@@ -94,5 +103,15 @@ class UserModel():
         starting_at=datetime.strptime(starting_date, "%Y-%m-%d")
         ending_at=datetime.strptime(ending_date, "%Y-%m-%d")  + timedelta(days=1)
         _filter = {"employee_id":employee_code,"date": {"$gte": starting_at, "$lt": ending_at}}
+        employee_log_list = collection.find(_filter,{"_id":0, "log_details":0}).to_list()
+        return employee_log_list
+    
+    def get_attandance_report_all(self,compony_code, date):
+        # collection = self.db[f'attandance_{compony_code}']
+        collection = self.db[f"attandance_{compony_code}_{datetime.utcnow().strftime('%Y-%m')}"]
+        # 2025-10-01 formate
+        starting_at=datetime.strptime(date, "%Y-%m-%d")
+        ending_at=datetime.strptime(date, "%Y-%m-%d")  + timedelta(days=1)
+        _filter = {"date":{"$gte": starting_at, "$lt": ending_at}}
         employee_log_list = collection.find(_filter,{"_id":0, "log_details":0}).to_list()
         return employee_log_list
