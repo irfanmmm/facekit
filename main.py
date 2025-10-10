@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify
 from face_match.face_ml import FaceAttendance, job
 from model.compony_model import ComponyModel
 from model.user_model import UserModel
-from helper.trigger_mail import send_mail_with_template ,verify_email_smtp
+from helper.trigger_mail import send_mail_with_template
 
 app = Flask(__name__)
 
