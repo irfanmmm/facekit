@@ -119,7 +119,7 @@ class FaceAttendance:
                 return False
 
             # Resize image - not too aggressive
-            resized_img = cv2.resize(image, (0, 0),fx=0.75, fy=0.75)
+            resized_img = cv2.resize(image, (0, 0),fx=0.5, fy=0.5)
             print(f"Image shape after resize: {resized_img.shape}")
 
             # Find faces
