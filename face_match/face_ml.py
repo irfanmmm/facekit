@@ -235,7 +235,7 @@ class FaceAttendance:
                         # hours = int(duration_seconds // 3600)
                         # minutes = int((duration_seconds % 3600) // 60)
                         # seconds = int(duration_seconds % 60)
-                        direction = "out"
+                        direction = "Out"
                         attandance_collectiion.update_one(
                             _filter,
                             {
