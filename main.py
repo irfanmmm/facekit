@@ -36,7 +36,7 @@ def sighnup():
     message,company_code = componyCode._set(compony_name,_name,email,password,mobile_no,emp_count)
     if message == "faild":
         return jsonify({"message": company_code})
-    status = send_mail_with_template(email,_name,password,company_code,'')
+    status = send_mail_with_template(email,email,password,company_code,'')
     if status: 
         return jsonify({"message": message})
     else:
