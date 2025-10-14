@@ -146,11 +146,11 @@ def comare_face():
         latitude = data.get('latitude')
         longitude = data.get('longitude')
         if not all([compony_code, latitude, longitude]):
-            return jsonify({"message": "fill requerd fileds"})
+            return jsonify({"message": "can't find out your location"})
         match, message = attendance.compare_faces(
             file, compony_code, latitude, longitude)
         if match:
-            return jsonify({"message": "success" if isinstance(message, dict) else (message or "success"), "details": match})
+            return jsonify({"message": "success" if isinstance(message, dict) else (message or "success"), "details": message})
         else:
             return jsonify({"message": "Faild" if isinstance(message, dict) else (message or "Faild")})
         # return jsonify({"message": "Faild"})
