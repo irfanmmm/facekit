@@ -6,6 +6,7 @@ from threading import Lock
 from model.database import get_database
 from sklearn.neighbors import KDTree
 from flask import Flask
+from helper.is_check_radius import is_user_in_radius
 
 
 app = Flask(__name__)
@@ -14,7 +15,7 @@ app = Flask(__name__)
 # Global cache
 KNOWN_ENCODINGS = {}
 WORKING_HOURS = 8
-CUTOFF_TIME = time(23, 59) # example cutoff
+CUTOFF_TIME = time(23, 59)  # example cutoff
 lock = Lock()
 
 
@@ -27,7 +28,7 @@ class FaceAttendance:
 
     def build_tree(self, company_code):
         """Build KDTree for a company"""
-        
+
         employees = KNOWN_ENCODINGS.get(company_code, {})
         if not employees:
             return
@@ -42,30 +43,30 @@ class FaceAttendance:
             self.trees[company_code] = KDTree(encodings)
             self.emp_maps[company_code] = emp_ids
 
-    def update_face(self, employee_code, add_img, company_code, fullname):
+    def update_face(self, employee_code, branch, add_img, company_code, fullname):
         try:
-            
+
             file_bytes = np.frombuffer(add_img.read(), np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            
+
             if image is None:
                 return False
-                
+
             # More reasonable resize - keep more detail for better encoding
             resized_image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
-            
+
             # Find face locations
             locations = fr.face_locations(resized_image)
             if not locations:
                 print("No faces found in the image")
                 return False
-                
+
             # Get face encodings
             encodings = fr.face_encodings(resized_image, locations)
             if not encodings:
                 print("Could not generate face encoding")
                 return False
-                
+
             # Use the first encoding found
             encoding = encodings[0]
             print(f"Generated encoding shape: {encoding.shape}")
@@ -77,18 +78,19 @@ class FaceAttendance:
                 {"$set": {
                     "company_code": company_code,
                     "employee_code": employee_code,
+                    "branch": branch,
                     "fullname": fullname,
                     "encodings": encoding.tolist()  # Store as list for MongoDB
                 }},
                 upsert=True
             )
             return True
-            
+
         except Exception as e:
             print(f"Error in update_face: {e}")
             return False
-    
-    def crop_with_landmarks(self,image, landmarks, target_size=(256, 256)):
+
+    def crop_with_landmarks(self, image, landmarks, target_size=(256, 256)):
         h_img, w_img = image.shape[:2]
 
         x = int(float(landmarks["x"]) * w_img)
@@ -108,92 +110,117 @@ class FaceAttendance:
 
         return cv2.resize(face_crop, target_size)
 
-
-    def compare_faces(self, base_img, company_code, model="hog"):
+    def compare_faces(self, base_img, company_code, latitude, longitude, model="hog"):
         try:
             file_bytes = np.frombuffer(base_img.read(), np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            
+
             if image is None:
                 print("Could not decode image")
                 return False
 
             # Resize image - not too aggressive
-            resized_img = cv2.resize(image, (0, 0),fx=0.5, fy=0.5)
+            resized_img = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
             print(f"Image shape after resize: {resized_img.shape}")
 
             # Find faces
             face_locations = fr.face_locations(resized_img, model=model)
             print(f"Found {len(face_locations)} faces")
-            
+
             if not face_locations:
                 return False
 
             # Get current face encoding
-            current_encodings = fr.face_encodings(resized_img, face_locations, num_jitters=1)
+            current_encodings = fr.face_encodings(
+                resized_img, face_locations, num_jitters=1)
             if not current_encodings:
                 return False
-            
+
             current_encoding = current_encodings[0]
             print(f"Current encoding shape: {current_encoding.shape}")
-            print(f"Current encoding sample: {current_encoding[:5]}")  # First 5 values
-            
+            # First 5 values
+            print(f"Current encoding sample: {current_encoding[:5]}")
+
             # Get database
             db = get_database()
             collection = db[f'encodings_{company_code}']
-            
+
             # Get all stored employees
             stored_employees = list(collection.find())
             print(f"Found {len(stored_employees)} stored employees")
-            
+
             # Debug each comparison individually
             matches_found = []
             distances = []
-            
+
             for i, employee in enumerate(stored_employees):
                 try:
                     # Get stored encoding
-                    stored_encoding = np.array(employee['encodings'], dtype=np.float64)
+                    stored_encoding = np.array(
+                        employee['encodings'], dtype=np.float64)
                     print(f"\nEmployee {i}: {employee['fullname']}")
                     print(f"Stored encoding shape: {stored_encoding.shape}")
                     print(f"Stored encoding sample: {stored_encoding[:5]}")
-                    
+
                     # Calculate distance (lower = more similar)
-                    distance = fr.face_distance([stored_encoding], current_encoding)[0]
+                    distance = fr.face_distance(
+                        [stored_encoding], current_encoding)[0]
                     distances.append(distance)
                     print(f"Face distance: {distance}")
-                    
+
                     # Test with different tolerance levels
                     tolerances = [0.4, 0.5, 0.6, 0.7]
                     for tolerance in tolerances:
-                        match = fr.compare_faces([stored_encoding], current_encoding, tolerance=tolerance)[0]
-                        print(f"  Tolerance {tolerance}: {'MATCH' if match else 'NO MATCH'}")
-                    
+                        match = fr.compare_faces(
+                            [stored_encoding], current_encoding, tolerance=tolerance)[0]
+                        print(
+                            f"  Tolerance {tolerance}: {'MATCH' if match else 'NO MATCH'}")
+
                     # Use strict tolerance for actual matching
-                    is_match = fr.compare_faces([stored_encoding], current_encoding, tolerance=0.5)[0]
+                    is_match = fr.compare_faces(
+                        [stored_encoding], current_encoding, tolerance=0.5)[0]
                     if is_match:
                         matches_found.append({
                             'employee': employee,
                             'distance': distance,
                             'index': i
                         })
-                        
+
                 except Exception as e:
-                    print(f"Error processing employee {employee.get('fullname', 'Unknown')}: {e}")
+                    print(
+                        f"Error processing employee {employee.get('fullname', 'Unknown')}: {e}")
                     continue
-            
+
             print(f"\nSUMMARY:")
             print(f"Total comparisons: {len(stored_employees)}")
             print(f"Matches found: {len(matches_found)}")
             print(f"Average distance: {np.mean(distances):.4f}")
             print(f"Min distance: {np.min(distances):.4f}")
             print(f"Max distance: {np.max(distances):.4f}")
-            
+
             # If multiple matches, choose the one with smallest distance (most similar)
             if matches_found:
                 best_match = min(matches_found, key=lambda x: x['distance'])
-                print(f"Best match: {best_match['employee']['fullname']} (distance: {best_match['distance']:.4f})")
-                
+                print(
+                    f"Best match: {best_match['employee']['fullname']} (distance: {best_match['distance']:.4f})")
+
+                """ check radius under user is this location cercle """
+                branch_name = best_match['employee']['branch']
+                branch_filter = {
+                    "compony_code": company_code,
+                    "branch_name": branch_name,
+                }
+                branch_details = db[f'branch_{company_code}'].find_one(
+                    branch_filter)
+                branch_latitude = branch_details["latitude"]
+                branch_longitude = branch_details["longitude"]
+                branch_radius = branch_details["radius"]
+                if all([branch_latitude, branch_longitude, branch_radius]):
+                    user_in_radiuse, user_distance = is_user_in_radius(
+                        branch_latitude, branch_longitude, float(latitude), float(longitude), branch_radius)
+                    if not user_in_radiuse:
+                        return False, f"❌ User is outside the radius (distance: {user_distance} m)"
+
                 # Log attendance for best match only
                 matched_employee = best_match['employee']
                 attandance_collectiion = db[f"attandance_{company_code}_{datetime.utcnow().strftime('%Y-%m')}"]
@@ -205,24 +232,25 @@ class FaceAttendance:
                 seconds = total_seconds % 60
 
                 formatted = f"{hours:02}:{minutes:02}:{seconds:02}"
-                
+
                 now = datetime.now()
                 today = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 tomorrow = today + timedelta(days=1)
 
-                _filter = {"employee_id":matched_employee['employee_code'],"date": {"$gte": today, "$lt": tomorrow}}
+                _filter = {"employee_id": matched_employee['employee_code'], "date": {
+                    "$gte": today, "$lt": tomorrow}}
                 todays_record = attandance_collectiion.find_one(_filter)
                 direction = "in"
 
                 if not todays_record:
                     attandance_record = {
-                        "employee_id":matched_employee['employee_code'],
+                        "employee_id": matched_employee['employee_code'],
                         "fullname": matched_employee["fullname"],
                         "company_code": company_code,
-                        "date":now,
-                        "total_working_time":0,
-                        "present":"P",
-                        "log_details":[{"direction":direction,"time":now,"confidence_distance": float(best_match['distance']), }]
+                        "date": now,
+                        "total_working_time": 0,
+                        "present": "P",
+                        "log_details": [{"direction": direction, "time": now, "confidence_distance": float(best_match['distance']), }]
                     }
                     attandance_collectiion.insert_one(attandance_record)
                 else:
@@ -231,7 +259,8 @@ class FaceAttendance:
                     last_record = log_details[-1]
                     if last_record['direction'] == 'in':
                         # last_time = datetime.strptime(last_record['time'], "%Y-%m-%d %H:%M:%S")
-                        duration_seconds = (now - last_record['time']).total_seconds()
+                        duration_seconds = (
+                            now - last_record['time']).total_seconds()
                         # hours = int(duration_seconds // 3600)
                         # minutes = int((duration_seconds % 3600) // 60)
                         # seconds = int(duration_seconds % 60)
@@ -252,10 +281,10 @@ class FaceAttendance:
                                 "$push": {"log_details": {"direction": "in", "time": now}},
                                 "$set": {"confidence_distance": float(best_match['distance'])}
                             },
-                            
+
                         )
-                
-                return {
+
+                return True, {
                     "fullname": matched_employee['fullname'],
                     "employee_code": matched_employee['employee_code'],
                     "direction": direction,
@@ -263,13 +292,13 @@ class FaceAttendance:
                 }
             else:
                 print("No matches found with current tolerance")
-                return False
-                
+                return False, "No matches found with current user"
+
         except Exception as e:
             print(f"Error in compare_faces: {e}")
             import traceback
             print(traceback.format_exc())
-            return False
+            return False, ""
 
     def load_all_faces(self):
         """Load all encodings from DB into memory cache."""
@@ -297,16 +326,18 @@ class FaceAttendance:
             print(f"DB Load Error: {e}")
             return False
 
-        
 
 db = get_database()
+
+
 def job():
     for colloction_name in db.list_collection_names():
-        print("called...",colloction_name)
-        compony_code = colloction_name.endswith(f"{datetime.utcnow().strftime('%Y-%m')}")
+        print("called...", colloction_name)
+        compony_code = colloction_name.endswith(
+            f"{datetime.utcnow().strftime('%Y-%m')}")
         if not compony_code:
             continue
-        
+
         now = datetime.now()
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow = today + timedelta(days=1)
@@ -319,7 +350,7 @@ def job():
             duration_seconds = log['total_working_time']
             hours = int(duration_seconds // 3600)
             if hours < WORKING_HOURS:
-                required_seconds = WORKING_HOURS * 3600  
+                required_seconds = WORKING_HOURS * 3600
                 shortage_seconds = max(0, required_seconds - duration_seconds)
                 sh_hours = int(shortage_seconds // 3600)
                 sh_minutes = int((shortage_seconds % 3600) // 60)
@@ -328,8 +359,8 @@ def job():
                     {"_id": log["_id"]},
                     {
                         "$set": {
-                                "present": "L",
-                                "shortage":f"{sh_hours:2}:{sh_minutes:2}:{sh_seconds:2}"
-                            }
+                            "present": "L",
+                            "shortage": f"{sh_hours:2}:{sh_minutes:2}:{sh_seconds:2}"
+                        }
                     }
                 )
