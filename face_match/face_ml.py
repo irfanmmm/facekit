@@ -7,7 +7,7 @@ from model.database import get_database
 from sklearn.neighbors import KDTree
 from flask import Flask
 from helper.is_check_radius import is_user_in_radius
-
+from connection.validate_officekit import Validate
 
 app = Flask(__name__)
 # import traceback
@@ -43,7 +43,7 @@ class FaceAttendance:
             self.trees[company_code] = KDTree(encodings)
             self.emp_maps[company_code] = emp_ids
 
-    def update_face(self, employee_code, branch, add_img, company_code, fullname):
+    def update_face(self, employee_code, branch, add_img, company_code, fullname, existing_office_kit_user=None):
         try:
 
             file_bytes = np.frombuffer(add_img.read(), np.uint8)
@@ -80,7 +80,8 @@ class FaceAttendance:
                     "employee_code": employee_code,
                     "branch": branch,
                     "fullname": fullname,
-                    "encodings": encoding.tolist()  # Store as list for MongoDB
+                    "existing_user_officekit":existing_office_kit_user,
+                    "encodings": encoding.tolist()
                 }},
                 upsert=True
             )
@@ -242,6 +243,10 @@ class FaceAttendance:
                 todays_record = attandance_collectiion.find_one(_filter)
                 direction = "in"
 
+                validate = Validate(company_code, matched_employee['employee_code'])
+                valid, user_details = validate.validate_employee()
+                if not valid:
+                    return False, "No matches found with current user"
                 if not todays_record:
                     attandance_record = {
                         "employee_id": matched_employee['employee_code'],
@@ -283,7 +288,9 @@ class FaceAttendance:
                             },
 
                         )
-
+                
+                if user_details:
+                    validate.insert_log(direction)
                 return True, {
                     "fullname": matched_employee['fullname'],
                     "employee_code": matched_employee['employee_code'],

@@ -7,6 +7,8 @@ from face_match.face_ml import FaceAttendance, job
 from model.compony_model import ComponyModel
 from model.user_model import UserModel
 from helper.trigger_mail import send_mail_with_template
+from connection.validate_officekit import Validate
+from connection.db_officekit import conn, cursor
 
 app = Flask(__name__)
 
@@ -35,11 +37,11 @@ def sighnup():
     password = data.get("password")
     mobile_no = data.get("mobile_no")
     emp_count = data.get("emp_count")
-
+    client = data.get("client")
     if not all([compony_name, _name, email, password, mobile_no, emp_count]):
         return jsonify({"error": "Missing required fields"})
     message, company_code = componyCode._set(
-        compony_name, _name, email, password, mobile_no, emp_count)
+        compony_name, _name, email, password, mobile_no, emp_count, client)
     if message == "faild":
         return jsonify({"message": company_code})
     status = send_mail_with_template(email, email, password, company_code, '')
@@ -127,9 +129,12 @@ def add_employee_face():
         branch = data.get('branch')
         if not all([fullname, employeecode, compony_code, branch]):
             return jsonify({"error": "Missing required fields"})
-
+        validate = Validate(compony_code, employeecode)
+        validate_user, user = validate.validate_employee()
+        if not validate_user:
+            return jsonify({"message": "Faild"})
         status = attendance.update_face(
-            employee_code=employeecode, branch=branch, add_img=file, company_code=compony_code, fullname=fullname)
+            employee_code=employeecode, branch=branch, add_img=file, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
         if status:
             return jsonify({"message": "success"})
         return jsonify({"message": "Faild"})
@@ -295,4 +300,7 @@ def run_scheduler():
 threading.Thread(target=run_scheduler, daemon=True).start()
 
 if __name__ == "__main__":
+    cursor.execute("select * from ATTENDANCELOG_STAGING")
+    result = cursor.fetchone()
+    print(result, 'result = cursor.fetchone()result = cursor.fetchone()result = cursor.fetchone()')
     app.run(debug=True, port=5001, host="0.0.0.0")
