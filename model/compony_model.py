@@ -23,7 +23,7 @@ class ComponyModel():
         """Store company details"""
         if not client:
             compony_code = self._generate_code()
-        elif client == "150":
+        elif client == "1353":
             compony_code = client
         else:
             return "faild", "Falid this compony code"
