@@ -243,7 +243,7 @@ def comare_face():
         else:
             logger.warning("FACE COMPARISON FAILED | user_id: %s | reason: %s | time: %s",
                            user.get("employee_code"), str(result), now_ist_str())
-            return jsonify({"message": result}), 400
+            return jsonify({"message": result}), 200
 
 
 @app.route("/all-employees")
