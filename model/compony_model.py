@@ -55,7 +55,7 @@ class ComponyModel():
 
     def _verify(self, compony_code):
         """ verify compony code """
-        if self.collection.find_one({"compony_code": compony_code, "status": "active"}):
+        if self.collection.find_one({"compony_code": compony_code}):
             from model.database import get_database
             db = get_database("SettingsDB")
             settings_collection = db[f"settings_{compony_code}"]
