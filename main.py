@@ -24,7 +24,7 @@ def now_ist_str():
 
 
 app = Flask(__name__, template_folder='public/templates')
-app.register_blueprint(admin, url_prefix="/admin")
+app.register_blueprint(admin, url_prefix="/admin/facekit/admin")
 app.register_blueprint(auth, url_prefix="/auth")
 app.register_blueprint(attandance, url_prefix="/attandance")
 
