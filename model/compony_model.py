@@ -60,6 +60,10 @@ class ComponyModel():
             db = get_database("SettingsDB")
             settings_collection = db[f"settings_{compony_code}"]
             settings = settings_collection.find({}, {"_id": 0}).to_list()
+            if not settings:
+                from admin.admin_service.settings import setting
+                settings_collection.insert_many(setting)
+                settings = setting 
             from utility.jwt_utils import create_token
             return "success", create_token({"compony_code": compony_code, "settings": settings})
         return "Faild", None
