@@ -31,7 +31,9 @@ app.register_blueprint(attandance, url_prefix="/attandance")
 
 log_path = r"logs\face_comparison.log"
 
-os.makedirs(os.path.dirname(log_path), exist_ok=True)
+if log_path:  # Only make directory if it's not empty
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+# os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -207,7 +209,8 @@ def comare_face():
             latitude=latitude,
             longitude=longitude,
             individual_login=individual_login,
-            officekit_user=officekit_user
+            officekit_user=officekit_user,
+            user=user if individual_login else None
         )
 
         if success:
