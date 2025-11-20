@@ -28,11 +28,12 @@ app.register_blueprint(admin, url_prefix="/admin")
 app.register_blueprint(auth, url_prefix="/auth")
 app.register_blueprint(attandance, url_prefix="/attandance")
 
+log_path = "facekit.log"
 
-log_path = r"logs\face_comparison.log"
+log_dir = os.path.dirname(log_path)
 
-if log_path:  # Only make directory if it's not empty
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+if log_dir: 
+    os.makedirs(os.path.dirname(log_dir), exist_ok=True)
 # os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
 logging.basicConfig(
