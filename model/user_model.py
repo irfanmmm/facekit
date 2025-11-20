@@ -112,12 +112,12 @@ class UserModel():
             _filter, {"_id": 0, "log_details": 0}).to_list()
         return employee_log_list
 
-    def get_attandance_report_all(self, compony_code, date):
+    def get_attandance_report_all(self, compony_code, starting_date, ending_date):
         # collection = self.db[f'attandance_{compony_code}']
         collection = self.db[f"attandance_{compony_code}_{datetime.utcnow().strftime('%Y-%m')}"]
         # 2025-10-01 formate
-        starting_at = datetime.strptime(date, "%Y-%m-%d")
-        ending_at = datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)
+        starting_at = datetime.strptime(starting_date, "%Y-%m-%d")
+        ending_at = datetime.strptime(ending_date, "%Y-%m-%d") + timedelta(days=1)
         _filter = {"date": {"$gte": starting_at, "$lt": ending_at}}
         employee_log_list = collection.find(
             _filter, {"_id": 0, "log_details": 0}).to_list()

@@ -6,6 +6,8 @@ from email.mime.multipart import MIMEMultipart
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_PATH = os.path.join(BASE_DIR, "..", "public", "templates", "email_template.html")
+ADMIN_TEMPLATE_PATH = os.path.join(BASE_DIR, "..", "public", "templates", "admin_template.html")
+
 
 def send_mail_with_template(to_email,  username, password, company_code, confirm_url):
     sender_email = "muhamed.irfan.t@gmail.com"

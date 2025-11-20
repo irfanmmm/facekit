@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard | Company Management</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: "#4f46e5",
+              "primary-dark": "#4338ca",
+            },
+          },
+        },
+      };
+    </script>
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      .sidebar-active {
+        @apply bg-primary text-white;
+      }
+      .sidebar-item:hover {
+        @apply bg-indigo-50 text-primary;
+      }
+      .toggle-checkbox:checked + .toggle-label {
+        @apply bg-primary;
+      }
+      .toggle-checkbox:checked + .toggle-label:after {
+        transform: translateX(1.5rem);
+      }
+    </style>
+  </head>
+  <body class="h-full bg-gray-100 font-sans">
+    <!-- Login Page -->
+    <div
+      id="loginPage"
+      class="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-600 to-purple-700"
+    >
+      <div class="bg-white p-10 rounded-2xl shadow-2xl w-full max-w-md">
+        <h2 class="text-3xl font-bold text-center mb-8 text-gray-800">
+          Admin Login
+        </h2>
+        <form id="loginForm">
+          <div class="mb-6">
+            <label class="block text-gray-700 font-medium mb-2">Email</label>
+            <input
+              type="text"
+              class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder="admin@system.com"
+              required
+            />
+          </div>
+          <div class="mb-6">
+            <label class="block text-gray-700 font-medium mb-2">Password</label>
+            <input
+              type="password"
+              class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              required
+            />
+          </div>
+          <div class="flex items-center justify-between mb-6">
+            <label class="flex items-center">
+              <input type="checkbox" class="mr-2" />
+              <span class="text-sm text-gray-600">Remember me</span>
+            </label>
+            <a href="#" class="text-sm text-primary hover:underline"
+              >Forgot password?</a
+            >
+          </div>
+          <button
+            type="submit"
+            class="w-full bg-primary hover:bg-primary-dark text-white font-bold py-3 rounded-lg transition"
+          >
+            Login
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="dashboard" class="hidden min-h-screen flex">
+      <!-- Sidebar -->
+      <aside class="w-64 bg-white shadow-lg flex flex-col">
+        <div class="p-6 border-b">
+          <h1 class="text-2xl font-bold text-primary">Admin Panel</h1>
+        </div>
+        <nav class="mt-6 flex-1">
+          <a
+            href="#"
+            data-page="companies"
+            class="sidebar-item sidebar-active flex items-center px-6 py-4 text-gray-700 font-medium"
+          >
+            <i class="fas fa-building mr-3"></i> Companies
+          </a>
+          <a
+            href="#"
+            data-page="approvals"
+            class="sidebar-item flex items-center px-6 py-4 text-gray-700 font-medium"
+          >
+            <i class="fas fa-clipboard-check mr-3"></i> Approval Requests
+            <span
+              class="ml-auto bg-red-500 text-white text-xs px-2 py-1 rounded-full"
+              >8</span
+            >
+          </a>
+          <a
+            href="#"
+            class="flex items-center px-6 py-4 text-gray-700 font-medium"
+          >
+            <i class="fas fa-cog mr-3"></i> Settings
+          </a>
+        </nav>
+        <a
+          href="#"
+          id="logoutBtn"
+          class="flex items-center px-6 py-4 text-red-600 font-medium border-t"
+        >
+          <i class="fas fa-sign-out-alt mr-3"></i> Logout
+        </a>
+      </aside>
+
+      <!-- Main Content -->
+      <div class="flex-1 overflow-x-hidden">
+        <header class="bg-white shadow-sm border-b">
+          <div class="px-8 py-4 flex justify-between items-center">
+            <h2 id="pageTitle" class="text-2xl font-semibold text-gray-800">
+              Companies
+            </h2>
+            <div class="flex items-center space-x-4">
+              <span class="text-gray-600"
+                >Welcome, <strong>Super Admin</strong></span
+              >
+              <div
+                class="w-10 h-10 bg-primary rounded-full flex items-center justify-center text-white font-bold"
+              >
+                SA
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main class="p-8">
+          <!-- Companies List -->
+          <div id="companiesPage">
+            <div class="flex justify-between items-center mb-6">
+              <input
+                type="text"
+                id="companySearch"
+                placeholder="Search companies..."
+                class="px-4 py-2 border rounded-lg w-96 focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+              <button
+                onclick="openModal('addCompanyModal')"
+                class="bg-primary hover:bg-primary-dark text-white px-6 py-2 rounded-lg font-medium transition"
+              >
+                <i class="fas fa-plus mr-2"></i>Add Company
+              </button>
+            </div>
+
+            <div class="bg-white rounded-xl shadow overflow-hidden">
+              <table class="w-full" id="companiesTable">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th
+                      class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      Company
+                    </th>
+                    <th
+                      class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      Employees
+                    </th>
+                    <th
+                      class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      Plan
+                    </th>
+                    <th
+                      class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      Status
+                    </th>
+                    <th
+                      class="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200" id="companiesBody">
+                  <!-- Dummy Data Will Be Injected Here -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Company Settings Page -->
+          <div id="companySettingsPage" class="hidden">
+            <div
+              class="bg-white rounded-xl shadow-lg p-8"
+              id="companyDetailCard"
+            >
+              <!-- Dynamic Content -->
+            </div>
+          </div>
+
+          <!-- Approval Requests Page -->
+          <div id="approvalsPage" class="hidden">
+            <div class="flex justify-between mb-6">
+              <select id="approvalFilter" class="px-4 py-2 border rounded-lg">
+                <option value="all">All Requests</option>
+                <option value="pending">Pending</option>
+                <option value="active">Active</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+
+            <div id="approvalsContainer" class="space-y-4">
+              <!-- Dummy Requests -->
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- Modals -->
+    <div
+      id="addCompanyModal"
+      class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    >
+      <div class="bg-white rounded-xl p-8 w-full max-w-lg">
+        <h3 class="text-2xl font-bold mb-6">Add New Company</h3>
+        <input
+          type="text"
+          placeholder="Company Name"
+          class="w-full mb-4 px-4 py-2 border rounded-lg"
+        />
+        <input
+          type="email"
+          placeholder="Admin Email"
+          class="w-full mb-4 px-4 py-2 border rounded-lg"
+        />
+        <select class="w-full mb-4 px-4 py-2 border rounded-lg">
+          <option>Basic Plan</option>
+          <option>Professional</option>
+          <option>Enterprise</option>
+        </select>
+        <div class="flex justify-end space-x-4">
+          <button
+            onclick="closeModal('addCompanyModal')"
+            class="px-6 py-2 border rounded-lg"
+          >
+            Cancel
+          </button>
+          <button class="px-6 py-2 bg-primary text-white rounded-lg">
+            Create Company
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      id="rejectModal"
+      class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    >
+      <div class="bg-white rounded-xl p-8 w-full max-w-md">
+        <h3 class="text-xl font-bold mb-4">Reject Request</h3>
+        <textarea
+          id="rejectReason"
+          class="w-full px-4 py-3 border rounded-lg"
+          rows="4"
+          placeholder="Enter reason for rejection..."
+        ></textarea>
+        <div class="flex justify-end space-x-4 mt-6">
+          <button
+            onclick="closeModal('rejectModal')"
+            class="px-6 py-2 border rounded-lg"
+          >
+            Cancel
+          </button>
+          <button class="px-6 py-2 bg-red-600 text-white rounded-lg">
+            Reject Request
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Dummy Data
+      const companies = [];
+
+      const approvalRequests = [
+        {
+          id: 101,
+          employee: "Rahul Sharma",
+          company: "TechCorp Solutions",
+          type: "Overtime",
+          date: "Nov 18, 2025",
+          reason: "Client demo extended",
+          status: "pending",
+        },
+        {
+          id: 102,
+          employee: "Priya Patel",
+          company: "Global Logistics Ltd",
+          type: "Leave Early",
+          date: "Nov 19, 2025",
+          reason: "Doctor appointment",
+          status: "pending",
+        },
+        //   { id: 103, employee: "Amit Kumar", company: "Alpha Security Services", type: "Location Override", date: "Nov 17, 2025", reason: "Guard change at remote site", status: "pending" },
+        //   { id: 104, employee: "Sneha Reddy", company: "MedCare Hospitals", type: "Shift Change", date: "Nov 16, 2025", reason: "Family emergency", status: "approved" },
+        //   { id: 105, employee: "Vikram Singh", company: "QuickDelivery Express", type: "Late Check-in", date: "Nov 19, 2025", reason: "Traffic delay", status: "pending" },
+        //   { id: 106, employee: "Ananya Desai", company: "NexGen Retail", type: "Extra Hours", date: "Nov 15, 2025", reason: "Black Friday prep", status: "approved" },
+        //   { id: 107, employee: "Karan Mehta", company: "SkyHigh Construction", type: "Geo-fence Exit", date: "Nov 18, 2025", reason: "Material pickup outside zone", status: "rejected" },
+        //   { id: 108, employee: "Neha Gupta", company: "Innovate Labs", type: "Remote Work", date: "Nov 19, 2025", reason: "Internet issue at office", status: "pending" }
+      ];
+
+      document
+        .getElementById("logoutBtn")
+        .addEventListener("click", function () {
+          localStorage.removeItem("adminToken");
+        });
+
+      // Render Companies
+
+      function renderCompanies(filter = "") {
+        const tbody = document.getElementById("companiesBody");
+        fetch("/admin/componys", {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+          },
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            console.log("Fetched Companies:", data);
+            // You can replace the dummy data with fetched data here
+
+            const companies = data.componys;
+
+            tbody.innerHTML = "";
+            companies
+              .filter((c) =>
+                c.compony_code.toLowerCase().includes(filter.toLowerCase())
+              )
+              .forEach((company) => {
+                const row = `
+        <tr class="hover:bg-gray-50 cursor-pointer" onclick="openCompanySettings('${company?.compony_code}')">
+          <td class="px-6 py-4 flex items-center">
+            <div class="w-10 h-10 ${
+              company?.color
+            } rounded-full flex items-center justify-center text-white font-bold mr-3">${
+                  company?.logo
+                }</div>
+            <div>
+              <div class="font-semibold">${company?.compony_code}</div>
+              <div class="text-sm text-gray-500">${company?.compony_name}</div>
+            </div>
+          </td>
+          <td class="px-6 py-4">${company?.emp_count}</td>
+          <td class="px-6 py-4"><span class="px-3 py-1 text-xs rounded-full bg-indigo-100 text-indigo-800">${
+            company?.plan
+          }</span></td>
+          <td class="px-6 py-4"><span class="px-3 py-1 text-xs rounded-full ${
+            company?.status === "Active"
+              ? "bg-green-100 text-green-800"
+              : "bg-yellow-100 text-yellow-800"
+          }">${company?.status}</span></td>
+          <td class="px-6 py-4 text-primary hover:underline">View →</td>
+        </tr>`;
+                tbody.innerHTML += row;
+              });
+          })
+          .catch((error) => {
+            console.error("Error fetching companies:", error);
+          });
+      }
+
+      // Render Approval Requests
+      function renderApprovals(filter = "all") {
+        const container = document.getElementById("approvalsContainer");
+        container.innerHTML = "";
+
+        fetch("/admin/componys", {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+          },
+        })
+          .then((response) => response.json())
+          .then((approvalRequests) => {
+            console.log(approvalRequests);
+
+            approvalRequests?.componys
+              .filter((r) => filter === "all" || r.status === filter)
+              .forEach((req) => {
+                const statusColor =
+                  req.status === "active"
+                    ? "bg-green-100 text-green-800"
+                    : req.status === "rejected"
+                    ? "bg-red-100 text-red-800"
+                    : "bg-yellow-100 text-yellow-800";
+                const statusText =
+                  req.status.charAt(0).toUpperCase() + req.status.slice(1);
+
+                container.innerHTML += `
+        <div class="bg-white p-6 rounded-xl shadow hover:shadow-lg transition">
+          <div class="flex justify-between items-start">
+            <div>
+              <h4 class="font-semibold text-lg">${req?.compony_name}</h4>
+              <p class="text-sm text-gray-600">${req?.compony_code} • ${
+                  req?.email
+                }</p>
+             
+              ${
+                req.status !== "pending"
+                  ? `<p class="mt-2 text-sm"><strong>Status:</strong> <span class="px-3 py-1 rounded-full ${statusColor}">${statusText}</span></p>`
+                  : ""
+              }
+            </div>
+            ${
+              req.status === "pending"
+                ? `
+            <div class="flex space-x-3">
+              <button onclick="approveRequest('${req?.compony_code}')" class="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Approve</button>
+              <button onclick="openRejectModal('${req?.compony_code}')" class="px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Reject</button>
+            </div>`
+                : ""
+            }
+          </div>
+        </div>`;
+              });
+          });
+      }
+
+      // Open Company Settings
+      function openCompanySettings(id) {
+        console.log("Opening settings for company ID:", id);
+        fetch(`/admin/componys/${id}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+          },
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            console.log("Fetched Company Details:", data);
+            const company = data.componys?.[0];
+
+            fetch(`/admin/list-settings`, {
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+              },
+              method: "POST",
+              body: JSON.stringify({ compony_code: company?.compony_code }),
+            })
+              .then((response) => response.json())
+              .then((settingsData) => {
+                const settings = settingsData.settings;
+                console.log("Fetched Settings:", settings);
+                // You can use the settings data as needed
+
+                document.getElementById("companyDetailCard").innerHTML = `
+    <div class="flex justify-between items-center mb-8">
+      <h3 class="text-2xl font-bold">${company?.compony_code} - Settings</h3>
+      <button onclick="backToCompanies()" class="text-gray-500 hover:text-gray-700">
+        <i class="fas fa-arrow-left text-xl"></i>
+      </button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+      <div><label class="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
+        <input type="text" value="${
+          company.compony_name
+        }" class="w-full px-4 py-2 border rounded-lg" readonly /></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-2">Contact Email</label>
+        <input type="text" value="${
+          company.email
+        }" readonly class="w-full px-4 py-2 border rounded-lg" /></div>
+      <div><label class="block text-sm font-medium text-gray-700 mb-2">Total Employees</label>
+        <input type="text" value="${
+          company.emp_count
+        }" class="w-full px-4 py-2 border rounded-lg" readonly /></div>
+     
+    </div>
+
+    <h4 class="text-lg font-semibold mb-6">Service Settings</h4>
+    <div class="space-y-5">
+      ${settings
+        .map(
+          (service, i) => `
+        <label class="flex items-center justify-between cursor-pointer">
+          <span class="font-medium">${service?.setting_name}</span>
+          <div class="relative">
+            <input type="checkbox" onchange="toggleSetting(this, '${
+              service.setting_name
+            }', '${company.compony_code}')" class="toggle-checkbox hidden" ${
+            service?.value ? "checked" : ""
+          } />
+            <div class="toggle-label w-14 h-8 ${
+              service?.value ? "bg-primary" : "bg-gray-300"
+            } rounded-full shadow-inner"></div>
+            <div class="absolute w-6 h-6 bg-white rounded-full shadow top-1 ${
+              service?.value ? "left-7" : "left-1"
+            } transition"></div>
+          </div>
+        </label>
+      `
+        )
+        .join("")}
+    </div>
+
+    <div class="mt-10 flex justify-end space-x-4">
+      <button class="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+      <button class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark">Save Changes</button>
+    </div>
+  `;
+              });
+          })
+          .catch((error) => {
+            console.error("Error fetching company details:", error);
+          });
+        document.getElementById("companiesPage").classList.add("hidden");
+        document
+          .getElementById("companySettingsPage")
+          .classList.remove("hidden");
+        document.getElementById(
+          "pageTitle"
+        ).textContent = `${company.name} Settings`;
+      }
+
+      function toggleSetting(checkbox, settingName, compony_code) {
+        const isEnabled = checkbox.checked;
+        fetch(`/admin/update-settings`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+          },
+          body: JSON.stringify({
+            compony_code: compony_code,
+            settings: settingName,
+            value: isEnabled,
+          }),
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            if (data?.message === "success") {
+              openCompanySettings(compony_code);
+            }
+          })
+          .catch((error) => {
+            console.error("Error updating setting:", error);
+            alert("Failed to update setting. Please try again.");
+            // Revert checkbox state on failure
+            checkbox.checked = !isEnabled;
+          });
+      }
+
+      function backToCompanies() {
+        document.getElementById("companySettingsPage").classList.add("hidden");
+        document.getElementById("companiesPage").classList.remove("hidden");
+        document.getElementById("pageTitle").textContent = "Companies";
+      }
+
+      function approveRequest(id) {
+        
+        fetch("/admin/update-client-status", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+          },
+          body: JSON.stringify({ compony_code: id, status: "active" }),
+        })
+          .then((response) => response.json())
+          .then((data) => {
+              renderApprovals();
+            
+          })
+          .catch((error) => {
+            console.error("Error approving request:", error);
+            alert("Failed to approve request. Please try again.");
+          });
+      }
+      function openRejectModal(id) {
+        fetch("/admin/update-client-status", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
+          },
+          body: JSON.stringify({ compony_code: id, status: "rejected" }),
+        })
+          .then((response) => response.json())
+          .then((data) => {
+            renderApprovals();
+          })
+          .catch((error) => {
+            console.error("Error approving request:", error);
+            alert("Failed to approve request. Please try again.");
+          });
+      }
+
+      // Navigation & Search
+      document.querySelectorAll("[data-page]").forEach((link) => {
+        link.addEventListener("click", function (e) {
+          e.preventDefault();
+          const page = this.getAttribute("data-page");
+          document
+            .querySelectorAll(
+              "#companiesPage, #approvalsPage, #companySettingsPage"
+            )
+            .forEach((p) => p.classList.add("hidden"));
+          document
+            .querySelectorAll(".sidebar-item")
+            .forEach((item) => item.classList.remove("sidebar-active"));
+
+          if (page === "companies") {
+            document.getElementById("companiesPage").classList.remove("hidden");
+            document.getElementById("pageTitle").textContent = "Companies";
+            renderCompanies();
+          } else if (page === "approvals") {
+            document.getElementById("approvalsPage").classList.remove("hidden");
+            document.getElementById("pageTitle").textContent =
+              "Approval Requests";
+            renderApprovals();
+          }
+          this.classList.add("sidebar-active");
+        });
+      });
+
+      document
+        .getElementById("companySearch")
+        .addEventListener("input", function () {
+          renderCompanies(this.value);
+        });
+
+      document
+        .getElementById("approvalFilter")
+        .addEventListener("change", function () {
+          renderApprovals(this.value);
+        });
+
+      // Modal Controls
+      function openModal(id) {
+        document.getElementById(id).classList.remove("hidden");
+      }
+      function closeModal(id) {
+        document.getElementById(id).classList.add("hidden");
+      }
+
+      // Login & Init
+      document
+        .getElementById("loginForm")
+        .addEventListener("submit", function (e) {
+          e.preventDefault();
+
+          fetch("/admin/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              username: this.elements[0].value,
+              password: this.elements[1].value,
+            }),
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error("Login failed");
+              }
+              return response.json();
+            })
+            .then((data) => {
+              alert("Login successful!");
+              localStorage.setItem("adminToken", data.token);
+              document.getElementById("loginPage").classList.add("hidden");
+              document.getElementById("dashboard").classList.remove("hidden");
+              renderCompanies();
+              renderApprovals();
+            })
+            .catch((error) => {
+              alert("Login failed: " + error.message);
+              return;
+            });
+        });
+
+      document
+        .getElementById("logoutBtn")
+        .addEventListener("click", function () {
+          document.getElementById("dashboard").classList.add("hidden");
+          document.getElementById("loginPage").classList.remove("hidden");
+        });
+
+      // Initialize
+      renderCompanies();
+      renderApprovals();
+    </script>
+  </body>
+</html>

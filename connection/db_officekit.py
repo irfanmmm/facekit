@@ -9,8 +9,8 @@ server = os.getenv("OFFICEKIT_DB")
 database = os.getenv("OFFICEKIT_DATABASE_NAME")
 username = os.getenv("OFFICEKIT_USERNAME")
 password = os.getenv("OFFICEKIT_PASS")
-port = os.getenv("OFFICEKIT_DB_PORT")
-host = os.getenv("OFFICEKIT_DB_HOST")
+port = int(os.getenv("OFFICEKIT_DB_PORT", "1433"))
+# host = os.getenv("OFFICEKIT_DB_HOST")
 
 
 def get_db():
@@ -20,7 +20,7 @@ def get_db():
         password=password,
         database=database,
         port=port,
-        host=host,
+        # host=host,
         tds_version='7.4'
     )
 conn = get_db()

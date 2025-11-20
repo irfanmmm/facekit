@@ -34,7 +34,8 @@ class ComponyModel():
             "password": password,
             "mobile_no": mobile_no,
             "emp_count": emp_count,
-            "compony_code": compony_code
+            "compony_code": compony_code,
+            "status": "pending"
         }
         if client:
             data["officekit"] = True
@@ -54,8 +55,13 @@ class ComponyModel():
 
     def _verify(self, compony_code):
         """ verify compony code """
-        if self.collection.find_one({"compony_code": compony_code}):
-            return "success"
+        if self.collection.find_one({"compony_code": compony_code, "status": "active"}):
+            from model.database import get_database
+            db = get_database("SettingsDB")
+            settings_collection = db[f"settings_{compony_code}"]
+            settings = settings_collection.find({}, {"_id": 0}).to_list()
+            from utility.jwt_utils import create_token
+            return "success", create_token({"compony_code": compony_code, "settings": settings})
         return "Faild"
 
     def _verify_admin(self, compony_code, username, password):
@@ -66,12 +72,14 @@ class ComponyModel():
 
     def _branch_set(self, compony_code, branch_name, latitude, longitude, radius):
         try:
+
+
             data = {
                 "compony_code": compony_code,
                 "branch_name": branch_name,
                 "latitude": latitude,
                 "longitude": longitude,
-                "radius": radius,
+                "radius": radius
             }
             self.db[f'branch_{compony_code}'].insert_one(data)
             return True
@@ -84,4 +92,25 @@ class ComponyModel():
                 {}, {"_id": 0}).to_list()
             return branches
         except KeyError:
+            return False
+        
+    def _get_agents(self, compony_code):
+        try:
+            agents = self.db[f'agents_{compony_code}'].find(
+                {}, {"_id": 0}).to_list()
+            return agents
+        except KeyError:
+            return False
+        
+    def _set_agents(self, compony_code, agent_name):
+        try:
+            data = {
+                "agent_name": agent_name,
+                # "email": email,
+                # "password": password,
+                # "mobile_no": mobile_no,
+            }
+            self.db[f'agents_{compony_code}'].insert_one(data)
+            return True
+        except DuplicateKeyError:
             return False
