@@ -62,7 +62,7 @@ class ComponyModel():
             settings = settings_collection.find({}, {"_id": 0}).to_list()
             from utility.jwt_utils import create_token
             return "success", create_token({"compony_code": compony_code, "settings": settings})
-        return "Faild"
+        return "Faild", None
 
     def _verify_admin(self, compony_code, username, password):
         """ verify admin """
