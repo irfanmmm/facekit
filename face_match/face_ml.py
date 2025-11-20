@@ -22,7 +22,7 @@ class FaceAttendance:
     def __init__(self):
         pass
 
-    def compare_faces(self, base_img, company_code: str, latitude: float, longitude: float, individual_login: bool, officekit_user: bool) -> Tuple[bool, dict | str]:
+    def compare_faces(self, base_img, company_code, latitude, longitude, individual_login, officekit_user, user = None):
         try:
             # 1. Read and decode image
             file_bytes = np.frombuffer(base_img.read(), np.uint8)
