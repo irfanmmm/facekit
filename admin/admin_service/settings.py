@@ -31,6 +31,7 @@ def list_settings(compony_code):
         return settings_data
     else:
         collection.insert_many(setting)
+        setting.pop("_id", None)
         return setting
 
 
