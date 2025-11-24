@@ -87,9 +87,9 @@ class ComponyModel():
                 "longitude": longitude,
                 "radius": radius
             }
-            self.db[f'branch_{compony_code}'].insert_one(data, {})
+            self.db[f'branch_{compony_code}'].insert_one(data)
             return True
-        except DuplicateKeyError:
+        except DuplicateKeyError as e:
             return False
 
     def _get_branch(self, compony_code):
@@ -118,7 +118,8 @@ class ComponyModel():
                 # "password": password,
                 # "mobile_no": mobile_no,
             }
-            self.db[f'agents_{compony_code}'].insert_one(data, {})
+            self.db[f'agents_{compony_code}'].insert_one(data)
             return True
-        except DuplicateKeyError:
+        except DuplicateKeyError as e:
+            print(f"Error inserting agent:  {str(e)}")
             return False
