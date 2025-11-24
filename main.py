@@ -32,7 +32,7 @@ log_path = "facekit.log"
 
 log_dir = os.path.dirname(log_path)
 
-if log_dir: 
+if log_dir:
     os.makedirs(os.path.dirname(log_dir), exist_ok=True)
 # os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
@@ -78,7 +78,7 @@ def add_branch():
         compony_code, branch_name, latitude, longitude, radius)
     if status:
         return jsonify({"message": "success"})
-    return jsonify({"message": "Falid"})
+    return jsonify({"message": "Failed"})
 
 
 @app.route("/get-branch")
@@ -92,7 +92,7 @@ def get_branches():
         compony_code)
     if branches:
         return jsonify({"message": "success", "details": branches})
-    return jsonify({"message": "Falid"})
+    return jsonify({"message": "Failed"})
 
 
 @app.route("/get-agency")
@@ -106,7 +106,7 @@ def get_agencys():
         compony_code)
     if agencys:
         return jsonify({"message": "success", "details": agencys})
-    return jsonify({"message": "Falid"})
+    return jsonify({"message": "Failed"})
 
 
 @app.route("/set-agency", methods=['POST'])
@@ -126,7 +126,7 @@ def set_branches():
         compony_code, agency)
     if agencys:
         return jsonify({"message": "success"})
-    return jsonify({"message": "Falid"})
+    return jsonify({"message": "Failed"})
 
 
 @app.route("/add-employee-face", methods=['POST'])
@@ -150,15 +150,15 @@ def add_employee_face():
                 break
         if not all([fullname, employeecode, compony_code]):
             return jsonify({"error": "Missing required fields"})
-        validate = Validate(compony_code, employeecode)
+        validate = Validate(compony_code, employeecode, isAdmin=user.get("is_admin", False))
         validate_user, user = validate.validate_employee()
         if validate_user:
-            return jsonify({"message": "Faild"})
+            return jsonify({"message": "Failed"})
         status = attendance.update_face(
             employee_code=employeecode, branch=branch, add_img=file, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
         if status:
             return jsonify({"message": "success"})
-        return jsonify({"message": "Faild"})
+        return jsonify({"message": "Failed"})
 
     return jsonify({"message": "file is missing"})
 
@@ -263,10 +263,11 @@ def all_employees():
 @app.route("/attandance-report", methods=['POST'])
 @jwt_required
 def attandance_report():
+    user = request.user
     data = request.get_json()
     if not data:
         return jsonify({"message": "No JSON body received"}), 400
-    compony_code = data.get('compony_code')
+    compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
     employee_code = data.get('employee_code')
@@ -331,7 +332,7 @@ def edit_attandance():
         compony_code=compony_code, emploee_list_with_action=editable_details, editad_date=editad_date)
     if message:
         return jsonify({"message": message})
-    return jsonify({"message": "Faild"})
+    return jsonify({"message": "Failed"})
 
 
 @app.route("/edit-user", methods=['POST'])
@@ -357,7 +358,7 @@ def edit_user():
         message = userdetails.edit_user_details(
             compony_code, editable_details_files)
         return jsonify({"message": message})
-    return jsonify({"message": "Faild"})
+    return jsonify({"message": "Failed"})
 
 
 @app.route("/logs", methods=['POST'])

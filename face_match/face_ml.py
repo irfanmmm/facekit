@@ -22,7 +22,7 @@ class FaceAttendance:
     def __init__(self):
         pass
 
-    def compare_faces(self, base_img, company_code, latitude, longitude, individual_login, officekit_user, user = None):
+    def compare_faces(self, base_img, company_code, latitude, longitude, individual_login, officekit_user, user=None):
         try:
             # 1. Read and decode image
             file_bytes = np.frombuffer(base_img.read(), np.uint8)
@@ -47,7 +47,7 @@ class FaceAttendance:
             face_width = right - left
             face_height = bottom - top
 
-            MIN_FACE_SIZE = 90  
+            MIN_FACE_SIZE = 90
 
             if face_width < MIN_FACE_SIZE or face_height < MIN_FACE_SIZE:
                 return False, "Face too small or far. Please move closer to camera."
@@ -63,7 +63,7 @@ class FaceAttendance:
             current_encoding = encodings[0]
 
             # adjust this value based on your accuracy requirements
-            MAX_ALLOWED_DISTANCE = 0.45  
+            MAX_ALLOWED_DISTANCE = 0.45
             manager = FaceIndexManager(company_code)
             candidates = manager.search(
                 current_encoding, k=10, threshold=MAX_ALLOWED_DISTANCE)
@@ -134,18 +134,16 @@ class FaceAttendance:
 
             db = get_database()
             collection = db[f"encodings_{company_code}"]
-            result = collection.update_one(
-                {"employee_code": employee_code},
-                {"$set": {
-                    "company_code": company_code,
-                    "employee_code": employee_code,
-                    "branch": branch,
-                    "fullname": fullname,
-                    "existing_user_officekit": existing_office_kit_user,
-                    "encodings": encoding.tolist()
-                }},
-                upsert=True
-            )
+            collection.create_index("employee_code", unique=True)
+            data = {
+                "company_code": company_code,
+                "employee_code": employee_code,
+                "branch": branch,
+                "fullname": fullname,
+                "existing_user_officekit": existing_office_kit_user,
+                "encodings": encoding.tolist()
+            }
+            result = collection.insert_one(data)
             cashe = FaceIndexManager(company_code)
             cashe.add_employee({
                 "company_code": company_code,
@@ -154,7 +152,7 @@ class FaceAttendance:
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
                 "encodings": encoding.tolist(),
-                "_id": result.upserted_id
+                "_id": result.inserted_id
             })
             return True
 

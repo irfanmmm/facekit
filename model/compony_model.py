@@ -26,7 +26,7 @@ class ComponyModel():
         elif client == "1353":
             compony_code = client
         else:
-            return "faild", "Falid this compony code"
+            return "faild", "Failed this compony code"
         data = {
             "compony_name": compony_name,
             "name": name,
@@ -64,20 +64,21 @@ class ComponyModel():
                 from admin.admin_service.settings import setting
                 settings_collection.insert_many(setting)
                 setting.pop("_id", None)
-                settings = setting 
+                settings = setting
             from utility.jwt_utils import create_token
             return "success", create_token({"compony_code": compony_code, "settings": settings})
-        return "Faild", None
+        return "Failed", None
 
     def _verify_admin(self, compony_code, username, password):
         """ verify admin """
         if self.collection.find_one({"compony_code": compony_code, "email": username, "password": password}):
             return "success"
-        return "Faild"
+        return "Failed"
 
     def _branch_set(self, compony_code, branch_name, latitude, longitude, radius):
         try:
-
+            self.db[f'branch_{compony_code}'].create_index(
+                "branch_name", unique=True)
 
             data = {
                 "compony_code": compony_code,
@@ -86,7 +87,7 @@ class ComponyModel():
                 "longitude": longitude,
                 "radius": radius
             }
-            self.db[f'branch_{compony_code}'].insert_one(data)
+            self.db[f'branch_{compony_code}'].insert_one(data, {})
             return True
         except DuplicateKeyError:
             return False
@@ -98,7 +99,7 @@ class ComponyModel():
             return branches
         except KeyError:
             return False
-        
+
     def _get_agents(self, compony_code):
         try:
             agents = self.db[f'agents_{compony_code}'].find(
@@ -106,16 +107,18 @@ class ComponyModel():
             return agents
         except KeyError:
             return False
-        
+
     def _set_agents(self, compony_code, agent_name):
         try:
+            self.db[f'agents_{compony_code}'].create_index(
+                "agent_name", unique=True)
             data = {
                 "agent_name": agent_name,
                 # "email": email,
                 # "password": password,
                 # "mobile_no": mobile_no,
             }
-            self.db[f'agents_{compony_code}'].insert_one(data)
+            self.db[f'agents_{compony_code}'].insert_one(data, {})
             return True
         except DuplicateKeyError:
             return False

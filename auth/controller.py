@@ -59,8 +59,6 @@ def verify_compony_code():
 
 
 """ individual user | admin login """
-
-
 @auth.route("/user-login", methods=['POST'])
 @jwt_required
 def login_user():
@@ -68,10 +66,10 @@ def login_user():
     data = request.get_json()
     if not data:
         return jsonify({"message": "No JSON body received"}), 400
-    email = data.get("username")
+    username = data.get("username")
     password = data.get("password")
     compony_code = user.get('compony_code')
-    if not all([email, password]):
+    if not all([username, password]):
         return jsonify({"message": "Missing required fields"})
     db = get_database()
     collection = db["compony_details"]
@@ -80,18 +78,18 @@ def login_user():
     admin_user.get("password", "")
     admin_user.get("email", "")
 
-    if admin_user.get("email") == email and admin_user.get("password") == password:
+    if admin_user.get("email") == username and admin_user.get("password") == password:
         token = create_token({"compony_code": compony_code,
-                             "is_admin": True, "settings": user.get("settings")})
+                             "is_admin": True,"settings": user.get("settings")})
         return jsonify({"message": "success", "token": token})
 
     emp_collection = db[f'encodings_{compony_code}']
     if emp_collection.find_one(
-            {"company_code": compony_code, "employee_code": email, "password": password}, {"_id": 0}):
+            {"company_code": compony_code, "employee_code": username, "password": password}, {"_id": 0}):
         token = create_token({"compony_code": compony_code,
-                             "is_admin": False, "settings": user.get("settings")})
+                             "is_admin": False,"employee_code": username,"settings": user.get("settings")})
         return jsonify({"message": "success", "token": token})
-    return jsonify({"message": "Faild"})
+    return jsonify({"message": "Failed"})
 
 
 """individual syastem admin add user without add face and password """

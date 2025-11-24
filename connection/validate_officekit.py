@@ -3,12 +3,13 @@ from model.database import get_database
 
 
 class Validate():
-    def __init__(self, compony_code, employee_code):
+    def __init__(self, compony_code, employee_code, isAdmin=False):
         self.db = get_database()
         self.collection = self.db['compony_details']
         self.compony_code = compony_code
         self.employee_code = employee_code
         self.user_details = None
+        self.isAdmin = isAdmin
 
     def validate_employee(self):
         if self.collection.find_one({"compony_code": self.compony_code, "officekit": True}):
@@ -27,7 +28,7 @@ class Validate():
             return False, None
         elif self.collection.find_one({"compony_code": self.compony_code, "officekit": False}):
             if self.collection.find_one({"employee_id": self.employee_code}):
-                return False, None
+                return True, None
             else:
                 return False, None
         return False, None
