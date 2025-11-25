@@ -28,7 +28,7 @@ class Validate():
             return False, None
         elif self.collection.find_one({"compony_code": self.compony_code, "officekit": False}):
             if self.collection.find_one({"employee_id": self.employee_code}):
-                return True, None
+                return False, None
             else:
                 return False, None
         return False, None
