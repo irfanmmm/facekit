@@ -104,7 +104,7 @@ class FaceAttendance:
             traceback.print_exc()
             return False, "System error"
 
-    def update_face(self, employee_code, branch,agency, add_img, company_code, fullname, existing_office_kit_user=None):
+    def update_face(self, employee_code, branch, agency, add_img, company_code, fullname, existing_office_kit_user=None):
         try:
             file_bytes = np.frombuffer(add_img.read(), np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
@@ -145,7 +145,7 @@ class FaceAttendance:
                 "company_code": company_code,
                 "employee_code": employee_code,
                 "branch": branch,
-                "agency":agency,
+                "agency": agency,
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
                 "encodings": encoding.tolist()
@@ -155,7 +155,7 @@ class FaceAttendance:
                 "company_code": company_code,
                 "employee_code": employee_code,
                 "branch": branch,
-                "agency":agency,
+                "agency": agency,
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
                 "encodings": encoding.tolist(),
@@ -243,7 +243,7 @@ class FaceAttendance:
 
         if record and record.get("log_details"):
             last_log = record["log_details"][-1]
-            if last_log["direction"] == "in":
+            if last_log.get("direction") == "in":
                 direction = "out"
                 duration = (now - last_log["time"]).total_seconds()
                 log_entry["direction"] = "out"
@@ -260,8 +260,29 @@ class FaceAttendance:
                     filter_query,
                     {"$push": {"log_details": log_entry}}
                 )
-        else:
+        elif record:
             # First check-in of the day
+            _filter = {
+                "employee_id": employee["employee_code"],
+            }
+            collection.update_one(
+                _filter,
+                {
+                    "$set": {
+                        "present": "P",
+                        "company_code": company_code,
+                        "fullname": employee["fullname"],
+                        "date": now,
+                        "total_working_time": 0,
+                        "updated_at": datetime.utcnow()
+                    },
+                    "$push": {
+                        "log_details": log_entry
+                    }
+                },
+                upsert=True
+            )
+        else:
             collection.insert_one({
                 "employee_id": employee["employee_code"],
                 "fullname": employee["fullname"],

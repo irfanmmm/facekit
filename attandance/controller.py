@@ -33,14 +33,14 @@ def download_report():
     }, {"_id": 0}))
 
     if not records:
-        return jsonify({"message": "No records found"}), 404
+        return jsonify({"message": "No records found"})
 
     """ Process records and generate report (e.g., CSV or Excel) """
     # For demonstration, we'll just return the records as JSON
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Employee ID", "Full Name", "Date",
-                    "Total Working Time", "Present", "direction", "time"])
+                    "Total Working Time", "Present", "direction"])
 
     for record in records:
         log_details = record.get("log_details", [])

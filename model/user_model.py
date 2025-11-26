@@ -103,7 +103,8 @@ class UserModel():
                     "total_working_time": 0,
                     "date": starting_at,
                     "company_code": compony_code,
-                    "created_at": datetime.utcnow()
+                    "created_at": datetime.utcnow(),
+                    "log_details":[]
                 }
             }, upsert=True)
             print("success")
