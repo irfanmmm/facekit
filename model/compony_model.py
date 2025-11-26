@@ -44,6 +44,12 @@ class ComponyModel():
         else:
             data["officekit"] = False
         try:
+
+            self.db = get_database(client)
+            self.collection = self.db["compony_details"]
+            self.collection.create_index("email", unique=True)
+            self.collection.create_index("compony_code", unique=True)
+            self.branchcolloction = self.db['branch_details']
             self.collection.insert_one(data)
             return "success", client
         except DuplicateKeyError:
