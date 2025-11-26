@@ -16,8 +16,8 @@ from face_match.face_ml import FaceAttendance
 
 
 class UserModel():
-    def __init__(self):
-        self.db = get_database()
+    def __init__(self, compony_code):
+        self.db = get_database(compony_code)
 
     def get_all_users(self, compony_code):
         collection = self.db[f'encodings_{compony_code}']
@@ -113,12 +113,49 @@ class UserModel():
         return employee_log_list
 
     def get_attandance_report_all(self, compony_code, starting_date, ending_date):
-        # collection = self.db[f'attandance_{compony_code}']
-        collection = self.db[f"attandance_{compony_code}_{datetime.utcnow().strftime('%Y-%m')}"]
-        # 2025-10-01 formate
-        starting_at = datetime.strptime(starting_date, "%Y-%m-%d")
-        ending_at = datetime.strptime(ending_date, "%Y-%m-%d") + timedelta(days=1)
-        _filter = {"date": {"$gte": starting_at, "$lt": ending_at}}
-        employee_log_list = collection.find(
-            _filter, {"_id": 0, "log_details": 0}).to_list()
-        return employee_log_list
+        db = self.db
+        start = datetime.strptime(starting_date, "%Y-%m-%d")
+        end = datetime.strptime(ending_date, "%Y-%m-%d")
+
+        end = end + timedelta(days=1)
+
+        all_results = []
+
+        current = start.replace(day=1)
+
+        while current <= end:
+            month_key = current.strftime("%Y-%m")
+            collection_name = f"attandance_{compony_code}_{month_key}"
+            collection = db[collection_name]
+            month_start = max(start, current)
+            next_month = (current.replace(day=28) +
+                          timedelta(days=4)).replace(day=1)
+            month_end = min(end, next_month)
+
+            try:
+                existing_users = db[f"encodings_{compony_code}"].find(
+                    {}).to_list()
+
+                for user in existing_users:
+                    _filter = {"date": {
+                        "$gte": month_start, "$lt": month_end}, "employee_id": user['employee_code']}
+                    cursor = collection.find_one(
+                        _filter, {"_id": 0, "log_details": 0})
+                    if cursor:
+                        all_results.append(cursor)
+                    else:
+                        all_results.append({
+                            "employee_id": user['employee_code'],
+                            "fullname": user['fullname'],
+                            "company_code": compony_code,
+                            "date": None,
+                            "total_working_time": 0,
+                            "present": "A",
+                            "log_details": []
+                        })
+            except Exception:
+                pass
+
+            current = next_month
+
+        return all_results

@@ -3,30 +3,30 @@ from model.database import get_database
 from pymongo.errors import DuplicateKeyError
 
 
+def generate_code():
+    """Generate random unique company code like A123"""
+    while True:
+        code = f"A{random.randint(100, 999)}"
+        db = get_database()
+        for db_names in db.list_database_names():
+            # Ensure uniqueness
+            if not db_names == code:
+                return code
+
+
 class ComponyModel():
-    def __init__(self):
-        self.db = get_database()
-        self.collection = self.db['compony_details']
+    def __init__(self, compony_code=None):
+        self.db = get_database(compony_code)
+        if "compony_details" not in self.db.list_collection_names():
+            self.db.create_collection("compony_details")
+
+        self.collection = self.db["compony_details"]
         self.collection.create_index("email", unique=True)
         self.collection.create_index("compony_code", unique=True)
         self.branchcolloction = self.db['branch_details']
 
-    def _generate_code(self):
-        """Generate random unique company code like A123"""
-        while True:
-            code = f"A{random.randint(100, 999)}"
-            # Ensure uniqueness
-            if not self.collection.find_one({"compony_code": code}):
-                return code
-
     def _set(self, compony_name, name, email, password, mobile_no, emp_count, client=None):
         """Store company details"""
-        if not client:
-            compony_code = self._generate_code()
-        elif client == "1353":
-            compony_code = client
-        else:
-            return "faild", "Failed this compony code"
         data = {
             "compony_name": compony_name,
             "name": name,
@@ -34,16 +34,16 @@ class ComponyModel():
             "password": password,
             "mobile_no": mobile_no,
             "emp_count": emp_count,
-            "compony_code": compony_code,
+            "compony_code": client,
             "status": "pending"
         }
-        if client:
+        if client == "1353":
             data["officekit"] = True
         else:
             data["officekit"] = False
         try:
             self.collection.insert_one(data)
-            return "success", compony_code
+            return "success", client
         except DuplicateKeyError:
             return "faild", "Email already exists"
 
@@ -55,7 +55,7 @@ class ComponyModel():
 
     def _verify(self, compony_code):
         """ verify compony code """
-        if self.collection.find_one({"compony_code": compony_code}):
+        if self.collection.find_one({"compony_code": compony_code, "status": "active"}):
             from model.database import get_database
             db = get_database("SettingsDB")
             settings_collection = db[f"settings_{compony_code}"]
@@ -63,7 +63,9 @@ class ComponyModel():
             if not settings:
                 from admin.admin_service.settings import setting
                 settings_collection.insert_many(setting)
-                setting.pop("_id", None)
+                for s in setting:
+                    s.pop("_id", None)
+
                 settings = setting
             from utility.jwt_utils import create_token
             return "success", create_token({"compony_code": compony_code, "settings": settings})
@@ -123,3 +125,12 @@ class ComponyModel():
         except DuplicateKeyError as e:
             print(f"Error inserting agent:  {str(e)}")
             return False
+
+    def _generate_employee_code(self, compony_code):
+        """Generate random unique employee code like E1234"""
+        while True:
+            emp_code = f"EMP-{random.randint(1000, 9999)}"
+            # Ensure uniqueness
+            emp_collection = self.db[f'encodings_{compony_code}']
+            if not emp_collection.find_one({"employee_code": emp_code}):
+                return emp_code

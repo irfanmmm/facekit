@@ -81,7 +81,7 @@ class FaceAttendance:
 
             # 7. Geo-fencing check
             branch_name = employee.get("branch")
-            db = get_database()
+            db = get_database(company_code)
             if branch_name:
                 branch = db[f'branch_{company_code}'].find_one({
                     "company_code": company_code,
@@ -111,7 +111,7 @@ class FaceAttendance:
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
             if image is None:
-                return False
+                return False, "Invalid image format"
 
             # More reasonable resize - keep more detail for better encoding
             resized_image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
@@ -120,21 +120,29 @@ class FaceAttendance:
             locations = fr.face_locations(resized_image)
             if not locations:
                 print("No faces found in the image")
-                return False
+                return False, "No faces found in the image"
 
             # Get face encodings
             encodings = fr.face_encodings(resized_image, locations)
             if not encodings:
                 print("Could not generate face encoding")
-                return False
+                return False, "Could not generate face encoding"
 
             # Use the first encoding found
             encoding = encodings[0]
             print(f"Generated encoding shape: {encoding.shape}")
 
-            db = get_database()
+            db = get_database(company_code)
             collection = db[f"encodings_{company_code}"]
             collection.create_index("employee_code", unique=True)
+
+
+            cashe = FaceIndexManager(company_code)
+            # Upsert the encoding in the database   
+            result = cashe.search(encoding, k=1, threshold=0.4)
+            if result:
+                print("This face already exists in the database.")
+                return False, "This face already exists in the database."
             data = {
                 "company_code": company_code,
                 "employee_code": employee_code,
@@ -144,7 +152,7 @@ class FaceAttendance:
                 "encodings": encoding.tolist()
             }
             result = collection.insert_one(data)
-            cashe = FaceIndexManager(company_code)
+            
             cashe.add_employee({
                 "company_code": company_code,
                 "employee_code": employee_code,
@@ -154,18 +162,18 @@ class FaceAttendance:
                 "encodings": encoding.tolist(),
                 "_id": result.inserted_id
             })
-            return True
+            return True, "Face encoding updated successfully"
 
         except Exception as e:
             print(f"Error in update_face: {e}")
-            return False
+            return False, "System error during face update"
 
     def _log_attendance(self, company_code: str, employee: dict, distance: float):
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow_start = today_start + timedelta(days=1)
 
-        db = get_database()
+        db = get_database(company_code)
         collection_name = f"attandance_{company_code}_{now.strftime('%Y-%m')}"
         collection = db[collection_name]
 

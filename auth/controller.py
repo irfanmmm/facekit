@@ -9,17 +9,7 @@ import secrets
 
 auth = Blueprint('auth', __name__)
 
-componyCode = ComponyModel()  # initialize once
-
-
-# @auth.route('/login', methods=['POST'])
-# def user_login():
-#     return "Login Endpoint"
-
-
 """ Register user """
-
-
 @auth.route('/signup', methods=['POST'])
 def sighnup():
     data = request.get_json()
@@ -35,6 +25,11 @@ def sighnup():
     client = data.get("client")
     if not all([compony_name, _name, email, password, mobile_no, emp_count]):
         return jsonify({"error": "Missing required fields"})
+
+    if not client:
+        from model.compony_model import ComponyModel, generate_code
+        client = generate_code()
+    componyCode = ComponyModel(client)
     message, company_code = componyCode._set(
         compony_name, _name, email, password, mobile_no, emp_count, client)
     if message == "faild":
@@ -51,6 +46,7 @@ def verify_compony_code():
     compony_code = data.get("code")
     if not compony_code:
         return jsonify({"message": "compony code is requerd"})
+    componyCode = ComponyModel(compony_code)
     message, token = componyCode._verify(compony_code)
     if message == "success":
         return jsonify({"message": message, "token": token})
@@ -59,6 +55,8 @@ def verify_compony_code():
 
 
 """ individual user | admin login """
+
+
 @auth.route("/user-login", methods=['POST'])
 @jwt_required
 def login_user():
@@ -71,7 +69,7 @@ def login_user():
     compony_code = user.get('compony_code')
     if not all([username, password]):
         return jsonify({"message": "Missing required fields"})
-    db = get_database()
+    db = get_database(compony_code)
     collection = db["compony_details"]
     admin_user = collection.find_one(
         {"compony_code": user.get('compony_code')}, {"_id": 0})
@@ -80,14 +78,14 @@ def login_user():
 
     if admin_user.get("email") == username and admin_user.get("password") == password:
         token = create_token({"compony_code": compony_code,
-                             "is_admin": True,"settings": user.get("settings")})
+                             "is_admin": True, "settings": user.get("settings")})
         return jsonify({"message": "success", "token": token})
 
     emp_collection = db[f'encodings_{compony_code}']
     if emp_collection.find_one(
             {"company_code": compony_code, "employee_code": username, "password": password}, {"_id": 0}):
         token = create_token({"compony_code": compony_code,
-                             "is_admin": False,"employee_code": username,"settings": user.get("settings")})
+                             "is_admin": False, "employee_code": username, "settings": user.get("settings")})
         return jsonify({"message": "success", "token": token})
     return jsonify({"message": "Failed"})
 
@@ -120,7 +118,7 @@ def add_user_in_admin():
                 user_branch = data.get("branch")
                 if not user_branch:
                     return jsonify({"message": "Branch name is requerd"})
-                db = get_database()
+                db = get_database(user.get("compony_code"))
                 branch_detail = db[f'branch_{user.get("compony_code")}']
                 if not branch_detail.find_one({"compony_code": user.get("compony_code"), "branch_name": user_branch}):
                     return jsonify({"message": "Invalid branch name"})
@@ -133,7 +131,7 @@ def add_user_in_admin():
                 if not agency and agency_management_enabled:
                     return jsonify({"message": "agency is requerd"}), 400
 
-        db = get_database()
+        db = get_database(user.get("compony_code"))
         compony_details = db[f'compony_details']
         if not compony_details.find_one({"compony_code": user.get("compony_code"), "status": "active"}):
             return jsonify({"message": "Invalid company code or inactive company"})
@@ -177,6 +175,7 @@ def add_user_in_admin():
 def create_password():
     user = request.user
     data = request.get_json()
+    compony_code = user.get("compony_code")
     if not data:
         return jsonify({"message": "No JSON body received"}), 400
     employeecode = data.get("employeecode")
@@ -184,10 +183,10 @@ def create_password():
     if not all([employeecode, password]):
         return jsonify({"message": "Missing required fields"})
 
-    db = get_database()
-    collection = db[f'encodings_{user.get("compony_code")}']
+    db = get_database(compony_code)
+    collection = db[f'encodings_{compony_code}']
     result = collection.update_one(
-        {"company_code": user.get("compony_code"),
+        {"company_code": compony_code,
          "employee_code": employeecode},
         {"$set": {"password": password}}
     )
@@ -204,6 +203,7 @@ def create_password():
 def verify_admin():
     user = request.user
     data = request.get_json()
+    compony_code = user.get("compony_code")
     if not data:
         return jsonify({"message": "No JSON body received"}), 400
 
@@ -213,6 +213,20 @@ def verify_admin():
     if not all([username, password]):
         return jsonify({"message": "Missing required fields"})
 
+    componyCode = ComponyModel(compony_code)
     message = componyCode._verify_admin(
         user.get("compony_code"), username, password)
     return jsonify({"message": message})
+
+
+""" generate employee code """
+
+
+@auth.route("/generate-employee-code", methods=['GET'])
+@jwt_required
+def generate_employee_code():
+    user = request.user
+    compony_code = user.get("compony_code")
+    componyCode = ComponyModel(compony_code)
+    emp_code = componyCode._generate_employee_code(user.get("compony_code"))
+    return jsonify({"message":"success","employee_code": emp_code})

@@ -2,9 +2,10 @@
 import csv
 import io
 from flask import Blueprint, app, jsonify, request, Response
-from datetime import datetime,timedelta
+from datetime import datetime, timedelta
 from model.database import get_database
 from middleware.auth_middleware import jwt_required
+from helper.format_duration import format_duration
 
 attandance = Blueprint('attandance', __name__)
 
@@ -18,18 +19,18 @@ def download_report():
     # Validate
     if not compony_code or not starting_at or not ending_at:
         return jsonify({"error": "Missing required URL parameters"}), 400
-    db = get_database()
+    db = get_database(compony_code)
     """ attandance_150_2025-11 """
-    year_month = starting_at[:7] 
+    year_month = starting_at[:7]
     collection = db[f'attandance_{compony_code}_{year_month}']
     start_date = datetime.strptime(starting_at, "%Y-%m-%d")
     end_date = datetime.strptime(ending_at, "%Y-%m-%d") + timedelta(days=1)
     records = list(collection.find({
-    "date": {
-        "$gte": start_date,
-        "$lt": end_date
-    }
-}, {"_id": 0}))
+        "date": {
+            "$gte": start_date,
+            "$lt": end_date
+        }
+    }, {"_id": 0}))
 
     if not records:
         return jsonify({"message": "No records found"}), 404
@@ -43,16 +44,18 @@ def download_report():
 
     for record in records:
         log_details = record.get("log_details", [])
-        for log in log_details:
-            writer.writerow([
-                record.get("employee_id"),
-                record.get("fullname"),
-                record.get("date"),
-                record.get("total_working_time"),
-                record.get("present"),
-                log.get("direction"),
-                log.get("time")
-            ])
+        logs_string = "\n".join(
+            f"{log.get('direction')} - {log.get('time').strftime('%Y-%m-%d %H:%M:%S')}"
+            for log in log_details
+        )
+        writer.writerow([
+            record.get("employee_id"),
+            record.get("fullname"),
+            record.get("date"),
+            format_duration(record.get("total_working_time")),
+            record.get("present"),
+            logs_string
+        ])
     csv_data = output.getvalue()
     output.close()
     filename = f"attendance_report_{compony_code}_{starting_at}_to_{ending_at}.csv"

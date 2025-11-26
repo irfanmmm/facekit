@@ -4,7 +4,7 @@ from model.database import get_database
 
 class Validate():
     def __init__(self, compony_code, employee_code, isAdmin=False):
-        self.db = get_database()
+        self.db = get_database(compony_code)
         self.collection = self.db['compony_details']
         self.compony_code = compony_code
         self.employee_code = employee_code
@@ -27,8 +27,8 @@ class Validate():
                 return True, row_dict
             return False, None
         elif self.collection.find_one({"compony_code": self.compony_code, "officekit": False}):
-            if self.collection.find_one({"employee_id": self.employee_code}):
-                return False, None
+            if self.collection.find_one({"employee_code": self.employee_code}):
+                return True, None
             else:
                 return False, None
         return False, None

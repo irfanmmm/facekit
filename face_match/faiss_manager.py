@@ -7,6 +7,7 @@ import os
 import pickle
 from model.database import get_database
 
+
 class FaceIndexManager:
     _instances = {}
     _locks = {}
@@ -16,8 +17,10 @@ class FaceIndexManager:
             instance = super(FaceIndexManager, cls).__new__(cls)
             instance.company_code = company_code
             instance.index: Optional[faiss.IndexFlatL2] = None
-            instance.employee_map: List[dict] = []  # Maps FAISS vector ID → employee doc
-            instance.vector_to_doc_id: Dict[int, str] = {}  # FAISS ID → Mongo _id
+            # Maps FAISS vector ID → employee doc
+            instance.employee_map: List[dict] = []
+            # FAISS ID → Mongo _id
+            instance.vector_to_doc_id: Dict[int, str] = {}
             instance.lock = threading.Lock()
             cls._instances[company_code] = instance
             cls._locks[company_code] = threading.Lock()
@@ -26,9 +29,9 @@ class FaceIndexManager:
     def rebuild_index(self):
         """Rebuild FAISS index from MongoDB (call this on startup & when employees change)"""
         with self.lock:
-            db = get_database()
+            db = get_database(self.company_code)
             collection = db[f'encodings_{self.company_code}']
-            
+
             docs = list(collection.find({}, {
                 "encodings": 1,
                 "employee_code": 1,
@@ -72,9 +75,11 @@ class FaceIndexManager:
             # Update in-memory state
             self.index = new_index
             self.employee_map = valid_docs
-            self.vector_to_doc_id = {i: str(doc["_id"]) for i, doc in enumerate(valid_docs)}
+            self.vector_to_doc_id = {
+                i: str(doc["_id"]) for i, doc in enumerate(valid_docs)}
 
-            print(f"FAISS index rebuilt for company {self.company_code}: {len(valid_docs)} employees")
+            print(
+                f"FAISS index rebuilt for company {self.company_code}: {len(valid_docs)} employees")
 
     def search(self, query_encoding: np.ndarray, k: int = 5, threshold: float = 0.6):
         """Return list of (employee_doc, distance)"""
@@ -82,13 +87,15 @@ class FaceIndexManager:
             return []
 
         query = query_encoding.astype(np.float32).reshape(1, -1)
-        distances, indices = self.index.search(query, k * 2)  # search more, filter later
+        distances, indices = self.index.search(
+            query, k * 2)  # search more, filter later
 
         results = []
         for dist_l2, idx in zip(distances[0], indices[0]):
             if idx >= len(self.employee_map):
                 continue
-            distance = np.sqrt(dist_l2)  # Convert L2 → Euclidean (face_recognition uses this)
+            # Convert L2 → Euclidean (face_recognition uses this)
+            distance = np.sqrt(dist_l2)
             if distance > threshold:
                 continue
             employee_doc = self.employee_map[idx]
@@ -102,16 +109,17 @@ class FaceIndexManager:
 
     def add_employee(self, employee_doc: dict):
         """Add single employee and update index"""
-        with self.lock:
-            if self.index is None:
-                self.rebuild_index()
-                return
+        # with self.lock:
+        if self.index is None:
+            self.rebuild_index()
+            return
 
-            enc = np.array(employee_doc["encodings"], dtype=np.float32).reshape(1, -1)
-            self.index.add(enc)
-            new_id = len(self.employee_map)
-            self.employee_map.append(employee_doc)
-            self.vector_to_doc_id[new_id] = str(employee_doc["_id"])
+        enc = np.array(employee_doc["encodings"],
+                       dtype=np.float32).reshape(1, -1)
+        self.index.add(enc)
+        new_id = len(self.employee_map)
+        self.employee_map.append(employee_doc)
+        self.vector_to_doc_id[new_id] = str(employee_doc["_id"])
 
     def remove_employee(self, mongo_id: str):
         """Remove employee by MongoDB _id (not perfect with FlatL2, rebuild recommended)"""
@@ -147,4 +155,3 @@ class FaceIndexManager:
             return True
         except:
             return False
-    

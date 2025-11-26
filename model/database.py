@@ -1,6 +1,20 @@
 from pymongo import MongoClient
 
-def get_database():
+# CONNECTION_URL = "mongodb://localhost:27017/"
+exclude = ["SettingsDB", "admin", "sample_mflix", "local"]
+def get_database(db_name=None):
     CONNECTION_URL = "mongodb+srv://admin:123@attandance.e24v5se.mongodb.net/?retryWrites=true&w=majority&appName=Attandanc"
     client = MongoClient(CONNECTION_URL)
-    return client['Attandance'] 
+
+    # If db_name is not provided, return client itself
+    if not db_name:
+        return client
+
+    # Check if DB exists
+    existing_dbs = client.list_database_names()
+    if db_name not in existing_dbs:
+        print(f"Database '{db_name}' does NOT exist.")
+        return client[db_name]
+
+    print(f"Database '{db_name}' exists.")
+    return client[db_name]

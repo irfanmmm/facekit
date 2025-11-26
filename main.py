@@ -15,7 +15,7 @@ from admin.controller import admin
 from auth.controller import auth
 from attandance.controller import attandance
 from datetime import datetime, timezone, timedelta
-
+from model.database import get_database
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -28,13 +28,12 @@ app.register_blueprint(admin, url_prefix="/admin")
 app.register_blueprint(auth, url_prefix="/auth")
 app.register_blueprint(attandance, url_prefix="/attandance")
 
-log_path = "facekit.log"
+log_path = "logs/facekit.log"
 
 log_dir = os.path.dirname(log_path)
 
 if log_dir:
-    os.makedirs(os.path.dirname(log_dir), exist_ok=True)
-# os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,8 +53,8 @@ OFFICE_KIT_PRIMERY_URL = "http://appteam.officekithr.net/api/AjaxAPI/MobileUrl"
 # ---------------- DB Connection ----------------
 
 attendance = FaceAttendance()  # initialize once
-componyCode = ComponyModel()  # initialize once
-userdetails = UserModel()
+# componyCode = ComponyModel()  # initialize once
+# userdetails = UserModel()
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +68,18 @@ def add_branch():
         return jsonify({"message": "No JSON body received"}), 400
     compony_code = user.get('compony_code')
     branch_name = data.get('branch_name')
-    latitude = data.get('latitude')
-    longitude = data.get('longitude')
-    radius = data.get("radius")
-    if not all([branch_name, latitude, longitude, compony_code, radius]):
-        return jsonify({"error": "Missing required fields"})
+
+    for setting in user.get("settings"):
+        if setting.get("setting_name") == "Location Tracking":
+            if setting.get("value", False):
+                if not data.get('latitude') or data.get('longitude') or not data.get('radius'):
+                    return jsonify({"message": "latitude and longitude is requerd"})
+
+            latitude = data.get('latitude', None)
+            longitude = data.get('longitude', None)
+            radius = data.get("radius", None)
+
+    componyCode = ComponyModel(compony_code)
     status = componyCode._branch_set(
         compony_code, branch_name, latitude, longitude, radius)
     if status:
@@ -88,6 +94,7 @@ def get_branches():
     compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
+    componyCode = ComponyModel(compony_code)
     branches = componyCode._get_branch(
         compony_code)
     if branches:
@@ -102,6 +109,7 @@ def get_agencys():
     compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
+    componyCode = ComponyModel(compony_code)
     agencys = componyCode._get_agents(
         compony_code)
     if agencys:
@@ -122,6 +130,7 @@ def set_branches():
     compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
+    componyCode = ComponyModel(compony_code)
     agencys = componyCode._set_agents(
         compony_code, agency)
     if agencys:
@@ -150,16 +159,16 @@ def add_employee_face():
                 break
         if not all([fullname, employeecode, compony_code]):
             return jsonify({"error": "Missing required fields"})
-        validate = Validate(compony_code, employeecode, isAdmin=user.get("is_admin", False))
+        validate = Validate(compony_code, employeecode,
+                            isAdmin=user.get("is_admin", False))
         validate_user, user = validate.validate_employee()
         if validate_user:
-            return jsonify({"message": "Failed"})
-        status = attendance.update_face(
+            return jsonify({"message": "User already exists in Face Database"})
+        status, message = attendance.update_face(
             employee_code=employeecode, branch=branch, add_img=file, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
         if status:
             return jsonify({"message": "success"})
-        return jsonify({"message": "Failed"})
-
+        return jsonify({"message": "Failed" if not message else message})
     return jsonify({"message": "file is missing"})
 
 
@@ -256,6 +265,7 @@ def all_employees():
     compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
+    userdetails = UserModel(compony_code)
     data = userdetails.get_all_users(compony_code=compony_code)
     return jsonify({"message": "success", "data": data})
 
@@ -282,6 +292,7 @@ def attandance_report():
     if not ending_date:
         return jsonify({"message": "ending_date is requerd"})
 
+    userdetails = UserModel(compony_code)
     data = userdetails.get_attandance_report(
         compony_code=compony_code, employee_code=employee_code, starting_date=starting_date, ending_date=ending_date)
     return jsonify({"message": "success", "data": data})
@@ -302,7 +313,7 @@ def attandance_report_all():
     ending_date = data.get("ending_date")
     if not all([starting_date, ending_date]):
         return jsonify({"message": "date is requerd"})
-
+    userdetails = UserModel(compony_code)
     data = userdetails.get_attandance_report_all(
         compony_code=compony_code, starting_date=starting_date, ending_date=ending_date)
     return jsonify({"message": "success", "data": data})
@@ -328,6 +339,7 @@ def edit_attandance():
     if not editad_date:
         return jsonify({"message": "editad_date is requerd"})
 
+    userdetails = UserModel(compony_code)
     message = userdetails.edit_attandance_report(
         compony_code=compony_code, emploee_list_with_action=editable_details, editad_date=editad_date)
     if message:
@@ -355,6 +367,7 @@ def edit_user():
             "file": request.files.get(f"file_{i}") if request.files.get(f"file_{i}") else None
         })
     if editable_details_files:
+        userdetails = UserModel(compony_code)
         message = userdetails.edit_user_details(
             compony_code, editable_details_files)
         return jsonify({"message": message})
@@ -377,6 +390,20 @@ def get_logs():
     counts, data = attendance.get_logs(
         compony_code, from_date, to_date, page=page, limit=limit)
     return jsonify({"message": "success", "counts": counts, "data": data})
+
+
+@app.route("/app-version", methods=['GET'])
+def app_version():
+    db = get_database("AppVersion")
+
+    # Check if collection exists
+    if "appversion" not in db.list_collection_names():
+        db.create_collection("appversion")
+
+    collection = db["appversion"]
+
+    version = collection.find_one({}, {"_id": 0})
+    return jsonify({"message": "success", "version": version})
 
 
 @app.route('/')
