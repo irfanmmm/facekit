@@ -72,8 +72,8 @@ def add_branch():
     for setting in user.get("settings"):
         if setting.get("setting_name") == "Location Tracking":
             if setting.get("value", False):
-                if not data.get('latitude') or data.get('longitude') or not data.get('radius'):
-                    return jsonify({"message": "latitude and longitude is requerd"})
+                if not data.get('latitude') or not data.get('longitude') or not data.get('radius'):
+                    return jsonify({"message": "latitude, longitude and radius are required"})
 
             latitude = data.get('latitude', None)
             longitude = data.get('longitude', None)
