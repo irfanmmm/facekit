@@ -2,7 +2,7 @@ from .face_ml import FaceAttendance
 from .faiss_manager import FaceIndexManager
 from model.database import exclude
 # databases to skip
-
+import re
 
 
 def init_faiss_indexes():
@@ -12,6 +12,9 @@ def init_faiss_indexes():
 
     for dbname in database_names:
         if dbname in exclude:
+            continue
+        if not re.match(r"^(A?\d+)$", dbname):
+            print(f"Skipping invalid db name: {dbname}")
             continue
 
         print(f"\nChecking database: {dbname}")

@@ -155,8 +155,13 @@ def add_employee_face():
                 branch_requerd = settings.get("value", False)
                 branch = data.get('branch')
                 if branch_requerd and not branch:
-                    return jsonify({"message": "Branch is requerd"}), 400
-                break
+                    return jsonify({"message": "Branch is requerd"})
+            if settings.get("setting_name") == "Agency Management":
+                agency_requerd = settings.get("value", False)
+                agency = data.get('agency')
+                if agency_requerd and not agency:
+                    return jsonify({"message": "Agency is requerd"})
+
         if not all([fullname, employeecode, compony_code]):
             return jsonify({"error": "Missing required fields"})
         validate = Validate(compony_code, employeecode,
@@ -165,7 +170,7 @@ def add_employee_face():
         if validate_user:
             return jsonify({"message": "User already exists in Face Database"})
         status, message = attendance.update_face(
-            employee_code=employeecode, branch=branch, add_img=file, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
+            employee_code=employeecode, branch=branch, agency=agency, add_img=file, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
         if status:
             return jsonify({"message": "success"})
         return jsonify({"message": "Failed" if not message else message})
@@ -322,10 +327,11 @@ def attandance_report_all():
 @app.route("/edit-attandance", methods=['POST'])
 @jwt_required
 def edit_attandance():
+    user = request.user
     data = request.get_json()
     if not data:
         return jsonify({"message": "No JSON body received"}), 400
-    compony_code = data.get('compony_code')
+    compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
     # employee_code = data.get('employee_code')
@@ -360,7 +366,7 @@ def edit_user():
     editable_details_files = []
     for i, emp in enumerate(editable_details):
         editable_details_files.append({
-            "employee_id": emp['employee_id'],
+            "employee_id": emp['employee_code'],
             "branch": emp["branch"],
             "action": emp['action'],
             "full_name": emp['full_name'] if emp['full_name'] else None,

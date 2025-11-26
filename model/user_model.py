@@ -1,6 +1,7 @@
 from model.database import get_database
 from datetime import datetime, timedelta
 from face_match.face_ml import FaceAttendance
+from face_match.faiss_manager import FaceIndexManager
 # import datetime
 
 # def is_sunday(year):
@@ -21,6 +22,7 @@ class UserModel():
 
     def get_all_users(self, compony_code):
         collection = self.db[f'encodings_{compony_code}']
+
         return collection.find({}, {"_id": 0, "encodings": 0}).to_list()
 
     def edit_user_details(self, compony_code, editable_details):
@@ -34,17 +36,12 @@ class UserModel():
                     return "action not available"
 
                 if details['action'] == 'E':
-                    if not details['employee_id']:
-                        return "employee_id not available"
-
                     if details['file']:
                         face_details = FaceAttendance()
-                        status = face_details.update_face(
+                        status = face_details.edit_user_details(
                             employee_code=details['employee_id'],
-                            add_img=details['file'],
-                            company_code=compony_code,
-                            fullname=details['full_name'],
-                            branch=details['branch']
+                            emp_face=details['file'],
+                            compony_code=compony_code,
                         )
                         if status:
                             return "success"
@@ -70,10 +67,13 @@ class UserModel():
                     }
                     result = colloction.delete_one(_filter)
                     if result.deleted_count > 0:
+                        cache = FaceIndexManager(compony_code)
+                        cache.rebuild_index()
                         return "success"
                     else:
                         return "Employee not found for deletion"
             except Exception as e:
+                print(f"Exception occurred: {str(e)}")
                 return f"Exception occurred: {str(e)}"
 
         return "success"
@@ -89,13 +89,23 @@ class UserModel():
             starting_at = datetime.strptime(editad_date, "%Y-%m-%d")
             ending_at = datetime.strptime(
                 editad_date, "%Y-%m-%d") + timedelta(days=1)
-            _filter = {"employee_id": emploee_dict['employee_id'], "date": {
+            _filter = {"employee_id": emploee_dict['employee_code'], "date": {
                 "$gte": starting_at, "$lt": ending_at}}
+
             colloction.update_one(_filter, {
                 "$set": {
-                    "present": emploee_dict['action']
+                    "present": emploee_dict['action'],
+                    "updated_at": datetime.utcnow()
+                },
+                "$setOnInsert": {
+                    "employee_id": emploee_dict['employee_code'],
+                    "fullname": emploee_dict.get('employee_name'),
+                    "total_working_time": 0,
+                    "date": starting_at,
+                    "company_code": compony_code,
+                    "created_at": datetime.utcnow()
                 }
-            })
+            }, upsert=True)
             print("success")
         return "success"
 

@@ -104,9 +104,8 @@ class FaceAttendance:
             traceback.print_exc()
             return False, "System error"
 
-    def update_face(self, employee_code, branch, add_img, company_code, fullname, existing_office_kit_user=None):
+    def update_face(self, employee_code, branch,agency, add_img, company_code, fullname, existing_office_kit_user=None):
         try:
-
             file_bytes = np.frombuffer(add_img.read(), np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
@@ -136,9 +135,8 @@ class FaceAttendance:
             collection = db[f"encodings_{company_code}"]
             collection.create_index("employee_code", unique=True)
 
-
             cashe = FaceIndexManager(company_code)
-            # Upsert the encoding in the database   
+            # Upsert the encoding in the database
             result = cashe.search(encoding, k=1, threshold=0.4)
             if result:
                 print("This face already exists in the database.")
@@ -147,16 +145,17 @@ class FaceAttendance:
                 "company_code": company_code,
                 "employee_code": employee_code,
                 "branch": branch,
+                "agency":agency,
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
                 "encodings": encoding.tolist()
             }
             result = collection.insert_one(data)
-            
             cashe.add_employee({
                 "company_code": company_code,
                 "employee_code": employee_code,
                 "branch": branch,
+                "agency":agency,
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
                 "encodings": encoding.tolist(),
@@ -167,6 +166,58 @@ class FaceAttendance:
         except Exception as e:
             print(f"Error in update_face: {e}")
             return False, "System error during face update"
+
+    def edit_user_details(self, employee_code, emp_face, compony_code, existing_officekit_user=None):
+        try:
+            db = get_database(compony_code)
+            users = db["users"]
+
+            update_data = {}
+            if emp_face:
+                file_bytes = np.frombuffer(emp_face.read(), np.uint8)
+                image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+                if image is None:
+                    return False, "Invalid image format"
+
+                resized_image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
+                locations = fr.face_locations(resized_image)
+
+                if not locations:
+                    return False, "No faces found in the image"
+
+                encodings = fr.face_encodings(resized_image, locations)
+
+                if not encodings:
+                    return False, "Could not generate face encoding"
+
+                encoding = encodings[0]
+
+                enc_collection = db[f"encodings_{compony_code}"]
+                enc_collection.create_index("employee_code", unique=True)
+
+                cache = FaceIndexManager(compony_code)
+
+                # Check duplicate face
+                result = cache.search(encoding, k=1, threshold=0.4)
+                if result:
+                    return False, "This face already exists in the database."
+
+                enc_collection.update_one(
+                    {"employee_code": employee_code, "company_code": compony_code},
+                    {"$set": {"encodings": encoding.tolist()}},
+                    upsert=True
+                )
+
+                cache.rebuild_index()
+
+                update_data["face_updated"] = True
+
+            return True, "User details updated successfully"
+
+        except Exception as e:
+            print(f"Error in edit_user_details: {e}")
+            return False, "System error while updating user"
 
     def _log_attendance(self, company_code: str, employee: dict, distance: float):
         now = datetime.now()

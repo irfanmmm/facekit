@@ -18,12 +18,14 @@ class ComponyModel():
     def __init__(self, compony_code=None):
         self.db = get_database(compony_code)
         if "compony_details" not in self.db.list_collection_names():
-            self.db.create_collection("compony_details")
-
-        self.collection = self.db["compony_details"]
-        self.collection.create_index("email", unique=True)
-        self.collection.create_index("compony_code", unique=True)
-        self.branchcolloction = self.db['branch_details']
+            self.db = None
+            self.collection = None
+            self.branchcolloction = None
+        else:
+            self.collection = self.db["compony_details"]
+            self.collection.create_index("email", unique=True)
+            self.collection.create_index("compony_code", unique=True)
+            self.branchcolloction = self.db['branch_details']
 
     def _set(self, compony_name, name, email, password, mobile_no, emp_count, client=None):
         """Store company details"""
@@ -55,7 +57,7 @@ class ComponyModel():
 
     def _verify(self, compony_code):
         """ verify compony code """
-        if self.collection.find_one({"compony_code": compony_code, "status": "active"}):
+        if self.collection is not None and self.collection.find_one({"compony_code": compony_code, "status": "active"}):
             from model.database import get_database
             db = get_database("SettingsDB")
             settings_collection = db[f"settings_{compony_code}"]

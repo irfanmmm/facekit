@@ -1,9 +1,10 @@
 from pymongo import MongoClient
+import os
 
 # CONNECTION_URL = "mongodb://localhost:27017/"
 exclude = ["SettingsDB", "admin", "sample_mflix", "local"]
 def get_database(db_name=None):
-    CONNECTION_URL = "mongodb+srv://admin:123@attandance.e24v5se.mongodb.net/?retryWrites=true&w=majority&appName=Attandanc"
+    CONNECTION_URL = os.getenv("DATABASE_URL")
     client = MongoClient(CONNECTION_URL)
 
     # If db_name is not provided, return client itself
