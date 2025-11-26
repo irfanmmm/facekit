@@ -16,6 +16,9 @@ from auth.controller import auth
 from attandance.controller import attandance
 from datetime import datetime, timezone, timedelta
 from model.database import get_database
+from logging.handlers import RotatingFileHandler
+
+
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -35,11 +38,18 @@ log_dir = os.path.dirname(log_path)
 if log_dir:
     os.makedirs(log_dir, exist_ok=True)
 
+
+handler = RotatingFileHandler(
+    log_path,
+    maxBytes=1 * 1024 * 1024,   # 1 MB
+    backupCount=1
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(message)s",
     handlers=[
-        logging.FileHandler(log_path),
+        handler,
         logging.StreamHandler()
     ]
 )
