@@ -427,18 +427,6 @@ def home():
     return "Welcome to AttendEase API"
 
 
-# def run_scheduler():
-#     schedule.every(1).hours.do(job)
-#     while True:
-#         schedule.run_pending()
-#         time.sleep(1)
-
-
-# threading.Thread(target=run_scheduler, daemon=True).start()
-
 if __name__ == "__main__":
-    # cursor.execute("select * from ATTENDANCELOG_STAGING")
-    # result = cursor.fetchone()
-    # print(result, 'result = cursor.fetchone()result = cursor.fetchone()result = cursor.fetchone()')
     init_faiss_indexes()
     app.run(debug=True, port=5001, host="0.0.0.0")

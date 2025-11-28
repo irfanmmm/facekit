@@ -8,6 +8,7 @@ from middleware.auth_middleware import jwt_required
 from helper.format_duration import format_duration
 
 attandance = Blueprint('attandance', __name__)
+IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
 @attandance.route('/download-report')
@@ -23,6 +24,7 @@ def download_report():
     """ attandance_150_2025-11 """
     year_month = starting_at[:7]
     collection = db[f'attandance_{compony_code}_{year_month}']
+    usercollection = db[f'encodings_{compony_code}']
     start_date = datetime.strptime(starting_at, "%Y-%m-%d")
     end_date = datetime.strptime(ending_at, "%Y-%m-%d") + timedelta(days=1)
     records = list(collection.find({
@@ -39,23 +41,48 @@ def download_report():
     # For demonstration, we'll just return the records as JSON
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Employee ID", "Full Name", "Date",
-                    "Total Working Time", "Present", "direction"])
+    writer.writerow(["Employee ID", "Full Name", "Branch", "Agency", "Date", "First In", "Last Out",
+                    "Total Working Time", "Present"])
 
     for record in records:
         log_details = record.get("log_details", [])
-        logs_string = "\n".join(
-            f"{log.get('direction')} - {log.get('time').strftime('%Y-%m-%d %H:%M:%S')}"
-            for log in log_details
-        )
-        writer.writerow([
-            record.get("employee_id"),
-            record.get("fullname"),
-            record.get("date"),
-            format_duration(record.get("total_working_time")),
-            record.get("present"),
-            logs_string
-        ])
+
+    # Convert log times to IST and sort
+    logs_ist = [
+        {
+            "direction": log.get("direction"),
+            "time": log.get("time") + IST_OFFSET
+        }
+        for log in log_details
+    ]
+
+    logs_ist.sort(key=lambda x: x["time"])
+
+    # Extract First In & Last Out
+    first_in = next((log["time"]
+                    for log in logs_ist if log["direction"] == "in"), None)
+    last_out = next((log["time"] for log in reversed(
+        logs_ist) if log["direction"] == "out"), None)
+
+    # Build logs string
+    logs_string = "\n".join(
+        f"{log['direction']} - {log['time'].strftime('%Y-%m-%d %H:%M:%S')}"
+        for log in logs_ist
+    )
+
+    userdetails = usercollection.find_one(
+        {"employee_code": record.get("employee_id")})
+    writer.writerow([
+        record.get("employee_id"),
+        record.get("fullname"),
+        userdetails.get("branch"),
+        userdetails.get("agency"),
+        (record.get("date") + IST_OFFSET).strftime('%Y-%m-%d') if record.get("date") else "",
+        first_in.strftime('%Y-%m-%d %H:%M:%S') if first_in else "",
+        last_out.strftime('%Y-%m-%d %H:%M:%S') if last_out else "",
+        format_duration(record.get("total_working_time")),
+        record.get("present"),
+    ])
     csv_data = output.getvalue()
     output.close()
     filename = f"attendance_report_{compony_code}_{starting_at}_to_{ending_at}.csv"

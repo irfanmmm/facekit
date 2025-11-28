@@ -84,7 +84,7 @@ class FaceAttendance:
             db = get_database(company_code)
             if branch_name:
                 branch = db[f'branch_{company_code}'].find_one({
-                    "company_code": company_code,
+                    "compony_code": company_code,
                     "branch_name": branch_name
                 })
                 if branch and all(k in branch for k in ("latitude", "longitude", "radius")):
