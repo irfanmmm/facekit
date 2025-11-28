@@ -333,7 +333,7 @@
 
       function renderCompanies(filter = "") {
         const tbody = document.getElementById("companiesBody");
-        fetch("/facekit/admin/componys", {
+        fetch("/admin/componys", {
           headers: {
             Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
           },
@@ -388,7 +388,7 @@
         const container = document.getElementById("approvalsContainer");
         container.innerHTML = "";
 
-        fetch("/facekit/admin/componys", {
+        fetch("/admin/componys", {
           headers: {
             Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
           },
@@ -441,7 +441,7 @@
 
       // Open Company Settings
       function openCompanySettings(id) {
-        fetch(`/facekit/admin/componys/${id}`, {
+        fetch(`/admin/componys/${id}`, {
           headers: {
             Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
           },
@@ -451,7 +451,7 @@
             console.log("Fetched Company Details:", data);
             const company = data.componys?.[0];
 
-            fetch(`/facekit/admin/list-settings`, {
+            fetch(`/admin/list-settings`, {
               headers: {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${localStorage.getItem("adminToken")}`,
@@ -536,7 +536,7 @@
 
       function toggleSetting(checkbox, settingName, compony_code) {
         const isEnabled = checkbox.checked;
-        fetch(`/facekit/admin/update-settings`, {
+        fetch(`/admin/update-settings`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -570,7 +570,7 @@
 
       function approveRequest(id) {
         
-        fetch("/facekit/admin/update-client-status", {
+        fetch("/admin/update-client-status", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -589,7 +589,7 @@
           });
       }
       function openRejectModal(id) {
-        fetch("/facekit/admin/update-client-status", {
+        fetch("/admin/update-client-status", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -661,7 +661,7 @@
         .addEventListener("submit", function (e) {
           e.preventDefault();
 
-          fetch("/facekit/admin/login", {
+          fetch("/admin/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
