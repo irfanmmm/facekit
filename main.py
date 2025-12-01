@@ -3,7 +3,7 @@ import os
 import time
 import schedule
 import json
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, g
 from face_match.face_ml import FaceAttendance
 from middleware.auth_middleware import jwt_required
 from model.compony_model import ComponyModel
@@ -18,7 +18,9 @@ from datetime import datetime, timezone, timedelta
 from model.database import get_database
 from logging.handlers import RotatingFileHandler
 
-
+print("Initializing FAISS...")
+init_faiss_indexes()
+print("FAISS initialized.")
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -32,29 +34,59 @@ app.register_blueprint(auth, url_prefix="/auth")
 app.register_blueprint(attandance, url_prefix="/attandance")
 
 log_path = "logs/facekit.log"
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-log_dir = os.path.dirname(log_path)
-
-if log_dir:
-    os.makedirs(log_dir, exist_ok=True)
-
-
-handler = RotatingFileHandler(
-    log_path,
-    maxBytes=1 * 1024 * 1024,   # 1 MB
-    backupCount=1
-)
-
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
-        handler,
+        logging.FileHandler(log_path, encoding="utf-8"),
         logging.StreamHandler()
     ]
 )
 
-print("Logging file created at:", log_path)
+# Use app.logger
+app_logger = app.logger
+app_logger.setLevel(logging.INFO)
+
+@app.before_request
+def log_request_body():
+    if request.content_type and "multipart/form-data" in request.content_type:
+        # Avoid printing file binary content
+        file_info = []
+        for name, file in request.files.items():
+            file_info.append({
+                "name": name,
+                "filename": file.filename,
+                "size": len(file.read())
+            })
+            file.seek(0)  # reset pointer
+
+        app.logger.info(f"REQUEST | {request.method} {request.path} | FILES: {file_info}")
+    else:
+        app.logger.info(f"REQUEST | {request.method} {request.path} | BODY: {request.get_data()}")
+
+
+@app.after_request
+def after_request(response):
+    try:
+        # Calculate duration
+        start_time = g.start_time
+        duration = time.time() - start_time
+    except Exception:
+        duration = 0
+
+    # Get response data (decode from bytes)
+    try:
+        response_data = response.get_data(as_text=True)
+    except Exception:
+        response_data = "<unable to read response>"
+    app.logger.info(
+        f"RESPONSE | {request.method} {request.path} | STATUS: {response.status_code} "
+        f"| TIME: {duration}s | BODY: {response_data}"
+    )
+    return response
 
 
 OFFICE_KIT_API_KEY = "wba1kit5p900egc12weblo2385"
@@ -62,11 +94,9 @@ OFFICE_KIT_PRIMERY_URL = "http://appteam.officekithr.net/api/AjaxAPI/MobileUrl"
 
 # ---------------- DB Connection ----------------
 
-attendance = FaceAttendance()  # initialize once
-# componyCode = ComponyModel()  # initialize once
-# userdetails = UserModel()
+attendance = FaceAttendance()
 
-logger = logging.getLogger(__name__)
+
 
 
 @app.route("/add-branch", methods=['POST'])
@@ -195,8 +225,6 @@ def comare_face():
         return jsonify({"message": "File is missing"}), 400
 
     file = request.files['file']
-    logger.info("Face comparison request received | user_id: %s | IP: %s | Timestamp: %s",
-                user.get("employee_code"), request.remote_addr, now_ist_str())
 
     location_settings = False
     individual_login = False
@@ -213,20 +241,12 @@ def comare_face():
         latitude = request.form.get('latitude')
         longitude = request.form.get('longitude')
         if not all([latitude, longitude]):
-            logger.warning(
-                "Location data missing for user_id: %s during face comparison", user.get("employee_code"))
             return jsonify({"message": "Missing data"}), 400
         try:
             latitude = float(latitude)
             longitude = float(longitude)
-            logger.info("Location received - Lat: %s, Lon: %s for user_id: %s",
-                        str(latitude), str(longitude), user.get("employee_code"))
         except:
             return jsonify({"message": "Invalid location"}), 400
-        logger.info("STARTING FACE COMPARISON | user_id: %s | company_code: %s | location_required: %s | time: %s",
-                    user.get("employee_code"), user.get(
-                        "compony_code"), str(location_settings),
-                    now_ist_str())
 
         success, result = attendance.compare_faces(
             base_img=file,
@@ -239,18 +259,10 @@ def comare_face():
         )
 
         if success:
-            logger.info("FACE COMPARISON SUCCESS | user_id: %s | result: %s | time: %s",
-                        user.get("employee_code"), result, now_ist_str())
             return jsonify({"message": "success", "details": result}), 200
         else:
-            logger.warning("FACE COMPARISON FAILED | user_id: %s | reason: %s | time: %s",
-                           user.get("employee_code"), str(result), now_ist_str())
             return jsonify({"message": result}), 200
     else:
-        logger.info("STARTING FACE COMPARISON | user_id: %s | company_code: %s | location_required: %s | time: %s",
-                    user.get("employee_code"), user.get(
-                        "compony_code"), str(location_settings),
-                    now_ist_str())
         success, result = attendance.compare_faces(
             base_img=file,
             company_code=user.get("compony_code"),
@@ -261,12 +273,8 @@ def comare_face():
         )
 
         if success:
-            logger.info("FACE COMPARISON SUCCESS | user_id: %s | result: %s | time: %s",
-                        user.get("employee_code"), str(result), now_ist_str())
             return jsonify({"message": "success", "details": result}), 200
         else:
-            logger.warning("FACE COMPARISON FAILED | user_id: %s | reason: %s | time: %s",
-                           user.get("employee_code"), str(result), now_ist_str())
             return jsonify({"message": result}), 200
 
 
@@ -427,6 +435,6 @@ def home():
     return "Welcome to AttendEase API"
 
 
-if __name__ == "__main__":
-    init_faiss_indexes()
-    app.run(debug=True, port=5001, host="0.0.0.0")
+# if __name__ == "__main__":
+#     init_faiss_indexes()
+#     app.run(debug=True, port=5001, host="0.0.0.0")
