@@ -78,8 +78,6 @@ class FaceIndexManager:
             self.vector_to_doc_id = {
                 i: str(doc["_id"]) for i, doc in enumerate(valid_docs)}
 
-            print(
-                f"FAISS index rebuilt for company {self.company_code}: {len(valid_docs)} employees")
 
     def search(self, query_encoding: np.ndarray, k: int = 5, threshold: float = 0.6):
         """Return list of (employee_doc, distance)"""

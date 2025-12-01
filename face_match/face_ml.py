@@ -9,7 +9,6 @@ from connection.validate_officekit import Validate
 # This is the class we created earlier
 from .faiss_manager import FaceIndexManager
 
-
 def is_user_in_radius(branch_lat, branch_lng, user_lat, user_lng, radius_meters):
     from geopy.distance import geodesic
     branch = (branch_lat, branch_lng)
@@ -129,7 +128,6 @@ class FaceAttendance:
 
             # Use the first encoding found
             encoding = encodings[0]
-            print(f"Generated encoding shape: {encoding.shape}")
 
             db = get_database(company_code)
             collection = db[f"encodings_{company_code}"]

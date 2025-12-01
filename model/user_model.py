@@ -73,7 +73,6 @@ class UserModel():
                     else:
                         return "Employee not found for deletion"
             except Exception as e:
-                print(f"Exception occurred: {str(e)}")
                 return f"Exception occurred: {str(e)}"
 
         return "success"

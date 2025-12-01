@@ -10,6 +10,8 @@ import secrets
 auth = Blueprint('auth', __name__)
 
 """ Register user """
+
+
 @auth.route('/signup', methods=['POST'])
 def sighnup():
     data = request.get_json()
@@ -229,4 +231,12 @@ def generate_employee_code():
     compony_code = user.get("compony_code")
     componyCode = ComponyModel(compony_code)
     emp_code = componyCode._generate_employee_code(user.get("compony_code"))
-    return jsonify({"message":"success","employee_code": emp_code})
+    return jsonify({"message": "success", "employee_code": emp_code})
+
+
+@auth.route("/refresh-token", methods=['GET'])
+@jwt_required
+def refresh_toke():
+    user = request.user
+    new_token = create_token(user)
+    return jsonify({"message": "success", "token": new_token})

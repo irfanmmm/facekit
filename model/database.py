@@ -15,7 +15,7 @@ def get_database(db_name=None):
     existing_dbs = client.list_database_names()
     if db_name not in existing_dbs:
         print(f"Database '{db_name}' does NOT exist.")
-        return client[db_name]
+        return client[db_name] # create new db
 
     print(f"Database '{db_name}' exists.")
     return client[db_name]
