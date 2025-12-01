@@ -47,42 +47,42 @@ def download_report():
     for record in records:
         log_details = record.get("log_details", [])
 
-    # Convert log times to IST and sort
-    logs_ist = [
-        {
-            "direction": log.get("direction"),
-            "time": log.get("time") + IST_OFFSET
-        }
-        for log in log_details
-    ]
+        # Convert log times to IST and sort
+        logs_ist = [
+            {
+                "direction": log.get("direction"),
+                "time": log.get("time") + IST_OFFSET
+            }
+            for log in log_details
+        ]
 
-    logs_ist.sort(key=lambda x: x["time"])
+        logs_ist.sort(key=lambda x: x["time"])
 
-    # Extract First In & Last Out
-    first_in = next((log["time"]
-                    for log in logs_ist if log["direction"] == "in"), None)
-    last_out = next((log["time"] for log in reversed(
-        logs_ist) if log["direction"] == "out"), None)
+        # Extract First In & Last Out
+        first_in = next((log["time"]
+                        for log in logs_ist if log["direction"] == "in"), None)
+        last_out = next((log["time"] for log in reversed(
+            logs_ist) if log["direction"] == "out"), None)
 
-    # Build logs string
-    logs_string = "\n".join(
-        f"{log['direction']} - {log['time'].strftime('%Y-%m-%d %H:%M:%S')}"
-        for log in logs_ist
-    )
+        # Build logs string
+        logs_string = "\n".join(
+            f"{log['direction']} - {log['time'].strftime('%Y-%m-%d %H:%M:%S')}"
+            for log in logs_ist
+        )
 
-    userdetails = usercollection.find_one(
-        {"employee_code": record.get("employee_id")})
-    writer.writerow([
-        record.get("employee_id"),
-        record.get("fullname"),
-        userdetails.get("branch"),
-        userdetails.get("agency"),
-        (record.get("date") + IST_OFFSET).strftime('%Y-%m-%d') if record.get("date") else "",
-        first_in.strftime('%Y-%m-%d %H:%M:%S') if first_in else "",
-        last_out.strftime('%Y-%m-%d %H:%M:%S') if last_out else "",
-        format_duration(record.get("total_working_time")),
-        record.get("present"),
-    ])
+        userdetails = usercollection.find_one(
+            {"employee_code": record.get("employee_id")})
+        writer.writerow([
+            record.get("employee_id"),
+            record.get("fullname"),
+            userdetails.get("branch"),
+            userdetails.get("agency"),
+            (record.get("date") + IST_OFFSET).strftime('%Y-%m-%d') if record.get("date") else "",
+            first_in.strftime('%Y-%m-%d %H:%M:%S') if first_in else "",
+            last_out.strftime('%Y-%m-%d %H:%M:%S') if last_out else "",
+            format_duration(record.get("total_working_time")),
+            record.get("present"),
+        ])
     csv_data = output.getvalue()
     output.close()
     filename = f"attendance_report_{compony_code}_{starting_at}_to_{ending_at}.csv"
