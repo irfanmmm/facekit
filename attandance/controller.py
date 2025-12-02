@@ -47,6 +47,9 @@ def download_report():
     for record in records:
         log_details = record.get("log_details", [])
 
+        if not log_details:
+            continue
+
         # Convert log times to IST and sort
         logs_ist = [
             {
@@ -75,13 +78,13 @@ def download_report():
         writer.writerow([
             record.get("employee_id"),
             record.get("fullname"),
-            userdetails.get("branch"),
-            userdetails.get("agency"),
+            userdetails.get("branch", "N/A"),
+            userdetails.get("agency", "N/A"),
             (record.get("date") + IST_OFFSET).strftime('%Y-%m-%d') if record.get("date") else "",
             first_in.strftime('%Y-%m-%d %H:%M:%S') if first_in else "",
             last_out.strftime('%Y-%m-%d %H:%M:%S') if last_out else "",
-            format_duration(record.get("total_working_time")),
-            record.get("present"),
+            format_duration(record.get("total_working_time", 0)),
+            record.get("present", "Working"),
         ])
     csv_data = output.getvalue()
     output.close()
