@@ -9,32 +9,19 @@ from model.database import get_database
 
 
 class FaceIndexManager:
-    _instances = {}   # one instance per company
-    # ❌ Removed _locks — no global lock needed
+    _instances = {}
 
     def __new__(cls, company_code: str):
         if company_code not in cls._instances:
             instance = super(FaceIndexManager, cls).__new__(cls)
             instance.company_code = company_code
-
-            # FAISS index
             instance.index: Optional[faiss.IndexFlatL2] = None
-
-            # Maps FAISS vector → employee doc
             instance.employee_map: List[dict] = []
-
-            # FAISS ID → Mongo _id
             instance.vector_to_doc_id: Dict[int, str] = {}
-
-            # ✔ Only used for rebuild/add/remove (NOT SEARCH)
             instance.modify_lock = threading.Lock()
-
             cls._instances[company_code] = instance
         return cls._instances[company_code]
 
-    # -----------------------------------------------------------
-    # SAFE INDEX REBUILD
-    # -----------------------------------------------------------
     def rebuild_index(self):
         """Rebuild FAISS index from DB. Runs under lock to avoid race."""
         with self.modify_lock:
@@ -57,7 +44,6 @@ class FaceIndexManager:
 
             encodings = []
             valid_docs = []
-
             for doc in docs:
                 enc = doc.get("encodings")
                 if enc and len(enc) == 128:
@@ -70,12 +56,9 @@ class FaceIndexManager:
 
             encodings_np = np.vstack(encodings)
             dimension = 128
-
-            # Create FAISS index
             new_index = faiss.IndexFlatL2(dimension)
             new_index.add(encodings_np)
 
-            # Update memory structures
             self.index = new_index
             self.employee_map = valid_docs
             self.vector_to_doc_id = {
