@@ -18,9 +18,7 @@ from datetime import datetime, timezone, timedelta
 from model.database import get_database
 from logging.handlers import RotatingFileHandler
 
-print("Initializing FAISS...")
-init_faiss_indexes()
-print("FAISS initialized.")
+
 IST = timezone(timedelta(hours=5, minutes=30))
 
 

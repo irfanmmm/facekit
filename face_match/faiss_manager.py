@@ -9,26 +9,35 @@ from model.database import get_database
 
 
 class FaceIndexManager:
-    _instances = {}
-    _locks = {}
+    _instances = {}   # one instance per company
+    # ❌ Removed _locks — no global lock needed
 
     def __new__(cls, company_code: str):
         if company_code not in cls._instances:
             instance = super(FaceIndexManager, cls).__new__(cls)
             instance.company_code = company_code
+
+            # FAISS index
             instance.index: Optional[faiss.IndexFlatL2] = None
-            # Maps FAISS vector ID → employee doc
+
+            # Maps FAISS vector → employee doc
             instance.employee_map: List[dict] = []
+
             # FAISS ID → Mongo _id
             instance.vector_to_doc_id: Dict[int, str] = {}
-            instance.lock = threading.Lock()
+
+            # ✔ Only used for rebuild/add/remove (NOT SEARCH)
+            instance.modify_lock = threading.Lock()
+
             cls._instances[company_code] = instance
-            cls._locks[company_code] = threading.Lock()
         return cls._instances[company_code]
 
+    # -----------------------------------------------------------
+    # SAFE INDEX REBUILD
+    # -----------------------------------------------------------
     def rebuild_index(self):
-        """Rebuild FAISS index from MongoDB (call this on startup & when employees change)"""
-        with self.lock:
+        """Rebuild FAISS index from DB. Runs under lock to avoid race."""
+        with self.modify_lock:
             db = get_database(self.company_code)
             collection = db[f'encodings_{self.company_code}']
 
@@ -46,9 +55,9 @@ class FaceIndexManager:
                 self.vector_to_doc_id = {}
                 return
 
-            # Extract encodings
             encodings = []
             valid_docs = []
+
             for doc in docs:
                 enc = doc.get("encodings")
                 if enc and len(enc) == 128:
@@ -60,42 +69,42 @@ class FaceIndexManager:
                 return
 
             encodings_np = np.vstack(encodings)
-
-            # Create new index
             dimension = 128
-            new_index = faiss.IndexFlatL2(dimension)
-            # Optional: use IVF for >50k employees
-            # new_index = faiss.IndexIVFFlat(faiss.IndexFlatL2(dimension), dimension, 100)
-            # quantizer = faiss.IndexFlatL2(dimension)
-            # new_index = faiss.IndexIVFFlat(quantizer, dimension, 100)
-            # new_index.train(encodings_np)
 
+            # Create FAISS index
+            new_index = faiss.IndexFlatL2(dimension)
             new_index.add(encodings_np)
 
-            # Update in-memory state
+            # Update memory structures
             self.index = new_index
             self.employee_map = valid_docs
             self.vector_to_doc_id = {
-                i: str(doc["_id"]) for i, doc in enumerate(valid_docs)}
+                i: str(doc["_id"]) for i, doc in enumerate(valid_docs)
+            }
 
-
+    # -----------------------------------------------------------
+    # PARALLEL SEARCH (NO LOCK NEEDED)
+    # -----------------------------------------------------------
     def search(self, query_encoding: np.ndarray, k: int = 5, threshold: float = 0.6):
-        """Return list of (employee_doc, distance)"""
+        """
+        Face search — runs without lock.
+        FAISS read operations are safe in parallel.
+        """
         if self.index is None or self.index.ntotal == 0:
             return []
 
         query = query_encoding.astype(np.float32).reshape(1, -1)
-        distances, indices = self.index.search(
-            query, k * 2)  # search more, filter later
+        distances, indices = self.index.search(query, k * 2)
 
         results = []
         for dist_l2, idx in zip(distances[0], indices[0]):
             if idx >= len(self.employee_map):
                 continue
-            # Convert L2 → Euclidean (face_recognition uses this)
+
             distance = np.sqrt(dist_l2)
             if distance > threshold:
                 continue
+
             employee_doc = self.employee_map[idx]
             results.append({
                 "employee": employee_doc,
@@ -105,30 +114,38 @@ class FaceIndexManager:
 
         return results
 
+    # -----------------------------------------------------------
+    # SAFE ADD EMPLOYEE (LOCKED)
+    # -----------------------------------------------------------
     def add_employee(self, employee_doc: dict):
-        """Add single employee and update index"""
-        # with self.lock:
-        if self.index is None:
-            self.rebuild_index()
-            return
+        with self.modify_lock:
+            if self.index is None:
+                self.rebuild_index()
+                return
 
-        enc = np.array(employee_doc["encodings"],
-                       dtype=np.float32).reshape(1, -1)
-        self.index.add(enc)
-        new_id = len(self.employee_map)
-        self.employee_map.append(employee_doc)
-        self.vector_to_doc_id[new_id] = str(employee_doc["_id"])
+            enc = np.array(employee_doc["encodings"], dtype=np.float32).reshape(1, -1)
+            self.index.add(enc)
+
+            new_id = len(self.employee_map)
+            self.employee_map.append(employee_doc)
+            self.vector_to_doc_id[new_id] = str(employee_doc["_id"])
+            from main import app
+            app.logger.info(f"Worker post_fork: initializing FAISS indexes : {new_id}")
+            
 
     def remove_employee(self, mongo_id: str):
-        """Remove employee by MongoDB _id (not perfect with FlatL2, rebuild recommended)"""
-        # For FlatL2, removal is not efficient → just rebuild
-        self.rebuild_index()
+        with self.modify_lock:
+            # Best to rebuild index for FlatL2
+            self.rebuild_index()
 
+    # -----------------------------------------------------------
+    # SAVE / LOAD
+    # -----------------------------------------------------------
     def save_to_disk(self, path: str = None):
-        """Optional: persist index to disk"""
         if path is None:
             path = f"faiss_index_{self.company_code}.pkl"
-        with self.lock:
+
+        with self.modify_lock:
             if self.index is None:
                 return
             data = {
@@ -142,14 +159,18 @@ class FaceIndexManager:
     def load_from_disk(self, path: str = None):
         if path is None:
             path = f"faiss_index_{self.company_code}.pkl"
+
         if not os.path.exists(path):
             return False
+
         try:
             with open(path, "rb") as f:
                 data = pickle.load(f)
-            self.index = faiss.deserialize_index(data["index"])
-            self.employee_map = data["employee_map"]
-            self.vector_to_doc_id = data["vector_to_doc_id"]
+
+            with self.modify_lock:
+                self.index = faiss.deserialize_index(data["index"])
+                self.employee_map = data["employee_map"]
+                self.vector_to_doc_id = data["vector_to_doc_id"]
             return True
         except:
             return False

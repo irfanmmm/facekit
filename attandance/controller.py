@@ -49,8 +49,6 @@ def download_report():
 
         if not log_details:
             continue
-
-        # Convert log times to IST and sort
         logs_ist = [
             {
                 "direction": log.get("direction"),
@@ -61,7 +59,6 @@ def download_report():
 
         logs_ist.sort(key=lambda x: x["time"])
 
-        # Extract First In & Last Out
         first_in = next((log["time"]
                         for log in logs_ist if log["direction"] == "in"), None)
         last_out = next((log["time"] for log in reversed(
@@ -74,7 +71,7 @@ def download_report():
         )
 
         userdetails = usercollection.find_one(
-            {"employee_code": record.get("employee_id")})
+            {"employee_code": record.get("employee_id")}) or {}
         writer.writerow([
             record.get("employee_id"),
             record.get("fullname"),

@@ -99,6 +99,8 @@ class FaceAttendance:
 
         except Exception as e:
             print(f"[FaceAttendance] Error: {e}")
+            from main import app
+            app.logger.info(f"ERROR: {e}")
             import traceback
             traceback.print_exc()
             return False, "System error"
