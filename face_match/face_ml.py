@@ -9,6 +9,11 @@ from connection.validate_officekit import Validate
 # This is the class we created earlier
 from .faiss_manager import FaceIndexManager
 
+WORKING_HOURES = 8
+WORKING_SECONDS = 8 * 60 * 60
+EXCEPTION_SECONDS=300
+
+
 def is_user_in_radius(branch_lat, branch_lng, user_lat, user_lng, radius_meters):
     from geopy.distance import geodesic
     branch = (branch_lat, branch_lng)
@@ -117,13 +122,29 @@ class FaceAttendance:
             resized_image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
 
             # Find face locations
-            locations = fr.face_locations(resized_image)
-            if not locations:
+            face_locations = fr.face_locations(resized_image)
+            if not face_locations:
                 print("No faces found in the image")
                 return False, "No faces found in the image"
+            
+            if len(face_locations) > 1:
+                return False, "Multiple faces detected"
 
-            # Get face encodings
-            encodings = fr.face_encodings(resized_image, locations)
+            top, right, bottom, left = face_locations[0]
+
+            face_width = right - left
+            face_height = bottom - top
+
+            MIN_FACE_SIZE = 90
+
+            if face_width < MIN_FACE_SIZE or face_height < MIN_FACE_SIZE:
+                return False, "Face too small or far. Please move closer to camera."
+
+            aspect_ratio = face_width / face_height
+            if aspect_ratio < 0.6 or aspect_ratio > 1.8:
+                return False, "Face tilted too much. Look straight at camera."
+
+            encodings = fr.face_encodings(resized_image, face_locations)
             if not encodings:
                 print("Could not generate face encoding")
                 return False, "Could not generate face encoding"
@@ -248,9 +269,14 @@ class FaceAttendance:
                 duration = (now - last_log["time"]).total_seconds()
                 log_entry["direction"] = "out"
 
+                present = ""
+                including_exception = max(duration - EXCEPTION_SECONDS, 0)
+                if including_exception >= WORKING_SECONDS:
+                    present = "P"
                 collection.update_one(
                     filter_query,
                     {
+                        "$set": {"present": present},
                         "$push": {"log_details": log_entry},
                         "$inc": {"total_working_time": duration}
                     }
@@ -265,17 +291,20 @@ class FaceAttendance:
             _filter = {
                 "employee_id": employee["employee_code"],
             }
+
+            _updated_data = {
+                "company_code": company_code,
+                "fullname": employee["fullname"],
+                "date": now,
+                "present": "",
+                "total_working_time": 0,
+                "updated_at": datetime.utcnow()
+            }
+
             collection.update_one(
                 _filter,
                 {
-                    "$set": {
-                        "present": "P",
-                        "company_code": company_code,
-                        "fullname": employee["fullname"],
-                        "date": now,
-                        "total_working_time": 0,
-                        "updated_at": datetime.utcnow()
-                    },
+                    "$set": _updated_data,
                     "$push": {
                         "log_details": log_entry
                     }
@@ -289,7 +318,7 @@ class FaceAttendance:
                 "company_code": company_code,
                 "date": now,
                 "total_working_time": 0,
-                "present": "P",
+                "present": "",
                 "log_details": [log_entry]
             })
 
