@@ -1,4 +1,4 @@
-# face_match/face_ml.py
+import logging
 import cv2
 import os
 import numpy as np
@@ -11,12 +11,18 @@ import uuid
 # This is the class we created earlier
 from .faiss_manager import FaceIndexManager
 
+
 WORKING_HOURES = 9
 WORKING_SECONDS = 9 * 60 * 60
 EXCEPTION_SECONDS = 300
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 uploads_path = os.path.join(BASE_DIR, "uploads")
 os.makedirs(uploads_path, exist_ok=True)
+
+log_path = "logs/compare(ml)facekit.log"
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+logger = logging.getLogger("face_ml")
 
 
 def is_user_in_radius(branch_lat, branch_lng, user_lat, user_lng, radius_meters):
@@ -25,6 +31,13 @@ def is_user_in_radius(branch_lat, branch_lng, user_lat, user_lng, radius_meters)
     user = (user_lat, user_lng)
     distance = geodesic(branch, user).meters
     return distance <= radius_meters, distance
+
+def save_employee_image(image):
+    filename = f"{uuid.uuid4().hex}.jpg"
+    file_path = os.path.join(uploads_path, filename)
+    logger.info(file_path)
+    cv2.imwrite(file_path, image)
+    return
 
 
 def validate_face_image(image):
@@ -58,7 +71,7 @@ def validate_face_image(image):
     if edge_ratio > 0.30:
         return False, "Background too noisy or cluttered.", None
 
-    small = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
+    small = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
     face_locations = fr.face_locations(small)
 
     if not face_locations:
@@ -116,6 +129,7 @@ class FaceAttendance:
             # 1. Read and decode image
             file_bytes = np.frombuffer(base_img.read(), np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            save_employee_image(image)
             if image is None:
                 return False, "Invalid image format"
 
@@ -163,8 +177,8 @@ class FaceAttendance:
 
         except Exception as e:
             print(f"[FaceAttendance] Error: {e}")
-            from main import app
-            app.logger.info(f"ERROR: {e}")
+            
+            logger.info(f"ERROR: {e}")
             import traceback
             traceback.print_exc()
             return False, "System error"
@@ -173,6 +187,7 @@ class FaceAttendance:
         try:
             file_bytes = np.frombuffer(add_img.read(), np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            save_employee_image(image)
             if image is None:
                 return False, "Invalid image format"
             ok, message, encodings = validate_face_image(image)
@@ -213,6 +228,7 @@ class FaceAttendance:
 
         except Exception as e:
             print(f"Error in update_face: {e}")
+            logger.info(f"ERROR: {e}")
             return False, "System error during face update"
 
     def edit_user_details(self, employee_code, emp_face, compony_code, existing_officekit_user=None):
@@ -265,6 +281,7 @@ class FaceAttendance:
 
         except Exception as e:
             print(f"Error in edit_user_details: {e}")
+            logger.info(f"ERROR: {e}")
             return False, "System error while updating user"
 
     def _log_attendance(self, company_code: str, employee: dict, distance: float):
