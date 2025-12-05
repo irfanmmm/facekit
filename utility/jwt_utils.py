@@ -5,7 +5,7 @@ import os
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 def create_token(payload):
-    payload["exp"] = datetime.utcnow() + timedelta(minutes=15)
+    payload["exp"] = datetime.utcnow() + timedelta(days=15)
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 def verify_token(token):
