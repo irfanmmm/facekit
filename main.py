@@ -48,22 +48,15 @@ logging.basicConfig(
 app_logger = app.logger
 app_logger.setLevel(logging.INFO)
 
+
 @app.before_request
 def log_request_body():
     ip = request.access_route[0] if request.access_route else request.remote_addr
     if request.content_type and "multipart/form-data" in request.content_type:
-        # Avoid printing file binary content
-        file_info = []
-        for name, file in request.files.items():
-            file_info.append({
-                "name": name,
-                "filename": file.filename,
-                "size": len(file.read())
-            })
-            file.seek(0)  # reset pointer
-        app.logger.info(f"REQUEST | {request.method} USER_IP | {ip} {request.path} | FILES: {file_info}")
+        pass
     else:
-        app.logger.info(f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {request.get_data()}")
+        app.logger.info(
+            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {request.get_data()}")
 
 
 @app.after_request
@@ -93,8 +86,6 @@ OFFICE_KIT_PRIMERY_URL = "http://appteam.officekithr.net/api/AjaxAPI/MobileUrl"
 # ---------------- DB Connection ----------------
 
 attendance = FaceAttendance()
-
-
 
 
 @app.route("/add-branch", methods=['POST'])
@@ -220,7 +211,7 @@ def add_employee_face():
 def comare_face():
     user = request.user
     if 'file' not in request.files:
-        return jsonify({"message": "File is missing"}), 400
+        return jsonify({"message": "File is missing"}), 200
 
     file = request.files['file']
 
@@ -238,22 +229,30 @@ def comare_face():
     if location_settings:
         latitude = request.form.get('latitude')
         longitude = request.form.get('longitude')
-        if not all([latitude, longitude]):
-            return jsonify({"message": "Missing data"}), 400
+        left = request.form.get('left')
+        right = request.form.get('right')
+        bottom = request.form.get('bottom')
+        top = request.form.get('top')
+        width = request.form.get('width')
+        height = request.form.get('height')
+
+        if not all([latitude, longitude, left, right, top, bottom, width, height]):
+            return jsonify({"message": "Missing data"}), 200
         try:
             latitude = float(latitude)
             longitude = float(longitude)
         except:
-            return jsonify({"message": "Invalid location"}), 400
+            return jsonify({"message": "Invalid location"}), 200
+
+        face_paramiter = (int(left), int(right), int(top),
+                          int(bottom), int(width), int(height))
 
         success, result = attendance.compare_faces(
             base_img=file,
             company_code=user.get("compony_code"),
             latitude=latitude,
             longitude=longitude,
-            individual_login=individual_login,
-            officekit_user=officekit_user,
-            user=user if individual_login else None
+            # face_paramiter=face_paramiter
         )
 
         if success:
@@ -276,18 +275,27 @@ def comare_face():
             return jsonify({"message": result}), 200
 
 
-@app.route("/all-employees")
+@app.route("/all-employees", methods=['POST'])
 @jwt_required
 def all_employees():
     user = request.user
-    # data = request.get_json()
+    data = request.get_json()
     # if not data:
     #     return jsonify({"message": "No JSON body received"}), 400
     compony_code = user.get('compony_code')
+    limit = data.get('limit')
+    offset = data.get('offset')
+    search = data.get('search') if data.get('search') else None
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
+
+    if not limit:
+        limit = 10
+    if not offset:
+        offset = 0
     userdetails = UserModel(compony_code)
-    data = userdetails.get_all_users(compony_code=compony_code)
+    data = userdetails.get_all_users(
+        compony_code=compony_code, limit=limit, offset=offset, search=search)
     return jsonify({"message": "success", "data": data})
 
 
@@ -334,9 +342,18 @@ def attandance_report_all():
     ending_date = data.get("ending_date")
     if not all([starting_date, ending_date]):
         return jsonify({"message": "date is requerd"})
+    limit = user.get('limit')
+    offset = user.get('offset')
+    search = user.get('search') if user.get('search') else None
+    if not limit:
+        limit = 10
+    if not offset:
+        offset = 0
+
+    
     userdetails = UserModel(compony_code)
     data = userdetails.get_attandance_report_all(
-        compony_code=compony_code, starting_date=starting_date, ending_date=ending_date)
+        compony_code=compony_code, starting_date=starting_date, ending_date=ending_date, limit=limit, offset=offset, search=search)
     return jsonify({"message": "success", "data": data})
 
 
@@ -433,6 +450,29 @@ def home():
     return "Welcome to AttendEase API"
 
 
-# if __name__ == "__main__":
-#     init_faiss_indexes()
-#     app.run(debug=True, port=5001, host="0.0.0.0")
+if __name__ == "__main__":
+    init_faiss_indexes()
+
+    # db = get_database("A941")
+    # collection = db[f'encodings_A941']
+    # pipeline = [
+    #     {
+    #         "$group": {
+    #             "_id": "$employee_code",
+    #             "count": {"$sum": 1},
+    #             "docs": {"$push": "$$ROOT"}
+    #         }
+    #     },
+    #     {
+    #         "$match": {
+    #             "count": {"$gt": 1}  # Only duplicates
+    #         }
+    #     },
+    #     { "$unwind": "$docs" },
+    #     { "$replaceRoot": { "newRoot": "$docs" } }
+    # ]
+
+    # duplicates = list(collection.aggregate(pipeline))
+    # # for doc in duplicates:
+    # print(duplicates, "duplicatesduplicatesduplicates")
+    app.run(debug=True, port=5001, host="0.0.0.0")

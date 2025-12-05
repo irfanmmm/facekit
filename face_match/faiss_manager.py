@@ -97,9 +97,6 @@ class FaceIndexManager:
 
         return results
 
-    # -----------------------------------------------------------
-    # SAFE ADD EMPLOYEE (LOCKED)
-    # -----------------------------------------------------------
     def add_employee(self, employee_doc: dict):
 
         if self.index is None:

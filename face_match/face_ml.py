@@ -1,17 +1,22 @@
 # face_match/face_ml.py
 import cv2
+import os
 import numpy as np
 import face_recognition as fr
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any
 from model.database import get_database
 from connection.validate_officekit import Validate
+import uuid
 # This is the class we created earlier
 from .faiss_manager import FaceIndexManager
 
 WORKING_HOURES = 8
 WORKING_SECONDS = 8 * 60 * 60
-EXCEPTION_SECONDS=300
+EXCEPTION_SECONDS = 300
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+uploads_path = os.path.join(BASE_DIR, "uploads")
+os.makedirs(uploads_path, exist_ok=True)
 
 
 def is_user_in_radius(branch_lat, branch_lng, user_lat, user_lng, radius_meters):
@@ -22,11 +27,91 @@ def is_user_in_radius(branch_lat, branch_lng, user_lat, user_lng, radius_meters)
     return distance <= radius_meters, distance
 
 
+def validate_face_image(image):
+    h, w = image.shape[:2]
+    if h < 480 or w < 480:
+        return False, "Image resolution too low. Minimum required is 480x480.", None
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray_eq = cv2.equalizeHist(gray)
+    blur_score = cv2.Laplacian(gray_eq, cv2.CV_64F).var()
+
+    if blur_score < 60:
+        return False, f"Image is blurry (score: {blur_score:.2f}).", None
+
+    brightness = np.mean(gray)
+    if brightness < 60:
+        return False, "Image too dark. Increase lighting.", None
+    if brightness > 200:
+        return False, "Image too bright. Reduce lighting.", None
+
+    edges = cv2.Canny(gray, 30, 100)
+
+    edge_pixels = np.sum(edges > 0)
+    total_pixels = gray.size
+
+    edge_ratio = edge_pixels / total_pixels
+
+    if edge_ratio < 0.005:
+        return False, "Background too bright or washed out.", None
+
+    if edge_ratio > 0.30:
+        return False, "Background too noisy or cluttered.", None
+
+    small = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
+    face_locations = fr.face_locations(small)
+
+    if not face_locations:
+        return False, "No face detected.", None
+
+    if len(face_locations) > 1:
+        return False, "Multiple faces detected.", None
+
+    top, right, bottom, left = [x * 2 for x in face_locations[0]]
+
+    face_w = right - left
+    face_h = bottom - top
+
+    if face_w < 150 or face_h < 150:
+        return False, "Face too small. Move closer to the camera.", None
+
+    face_crop = image[top:bottom, left:right]
+    face_gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+
+    mouth_start = int(face_gray.shape[0] * 0.60)
+    mouth_end = int(face_gray.shape[0] * 0.90)
+
+    mouth_region = face_gray[mouth_start:mouth_end, :]
+
+    if mouth_region.size == 0 or mouth_region.shape[0] < 10:
+        return False, "Unable to detect mouth region. Adjust your face.", None
+    mouth_edges = cv2.Canny(mouth_region, 20, 60)
+    edge_ratio_mouth = np.sum(mouth_edges > 0) / mouth_region.size
+
+    if edge_ratio_mouth < 0.008:
+        return False, "Face obstruction detected (mask/sunglasses/cap).", None
+
+    MIN_FACE_SIZE = 90
+
+    if face_w < MIN_FACE_SIZE or face_h < MIN_FACE_SIZE:
+        return False, "Face too small or far. Please move closer to camera."
+
+    aspect_ratio = face_w / face_h
+    if aspect_ratio < 0.6 or aspect_ratio > 1.8:
+        return False, "Face tilted too much. Look straight at camera."
+
+    encodings = fr.face_encodings(
+        small, face_locations, num_jitters=1)
+    if not encodings:
+        return False, "Face encoding failed"
+    return True, face_locations, encodings
+
+
 class FaceAttendance:
     def __init__(self):
         pass
 
-    def compare_faces(self, base_img, company_code, latitude, longitude, individual_login, officekit_user, user=None):
+    def compare_faces(self, base_img, company_code, latitude, longitude):
         try:
             # 1. Read and decode image
             file_bytes = np.frombuffer(base_img.read(), np.uint8)
@@ -34,39 +119,13 @@ class FaceAttendance:
             if image is None:
                 return False, "Invalid image format"
 
-            # 2. Resize for speed
-            small_image = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
+            ok, message, encodings = validate_face_image(image)
 
-            # 3. Detect face
-            face_locations = fr.face_locations(small_image, model="hog")
-            if not face_locations:
-                return False, "No face detected"
+            if not ok:
+                return False, message
 
-            if len(face_locations) > 1:
-                return False, "Multiple faces detected"
-
-            # CORRECT way to get face bounding box
-            top, right, bottom, left = face_locations[0]
-
-            face_width = right - left
-            face_height = bottom - top
-
-            MIN_FACE_SIZE = 90
-
-            if face_width < MIN_FACE_SIZE or face_height < MIN_FACE_SIZE:
-                return False, "Face too small or far. Please move closer to camera."
-
-            aspect_ratio = face_width / face_height
-            if aspect_ratio < 0.6 or aspect_ratio > 1.8:
-                return False, "Face tilted too much. Look straight at camera."
-
-            encodings = fr.face_encodings(
-                small_image, face_locations, num_jitters=1)
-            if not encodings:
-                return False, "Face encoding failed"
             current_encoding = encodings[0]
 
-            # adjust this value based on your accuracy requirements
             MAX_ALLOWED_DISTANCE = 0.45
             manager = FaceIndexManager(company_code)
             candidates = manager.search(
@@ -114,48 +173,16 @@ class FaceAttendance:
         try:
             file_bytes = np.frombuffer(add_img.read(), np.uint8)
             image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
             if image is None:
                 return False, "Invalid image format"
-
-            # More reasonable resize - keep more detail for better encoding
-            resized_image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
-
-            # Find face locations
-            face_locations = fr.face_locations(resized_image)
-            if not face_locations:
-                print("No faces found in the image")
-                return False, "No faces found in the image"
-            
-            if len(face_locations) > 1:
-                return False, "Multiple faces detected"
-
-            top, right, bottom, left = face_locations[0]
-
-            face_width = right - left
-            face_height = bottom - top
-
-            MIN_FACE_SIZE = 90
-
-            if face_width < MIN_FACE_SIZE or face_height < MIN_FACE_SIZE:
-                return False, "Face too small or far. Please move closer to camera."
-
-            aspect_ratio = face_width / face_height
-            if aspect_ratio < 0.6 or aspect_ratio > 1.8:
-                return False, "Face tilted too much. Look straight at camera."
-
-            encodings = fr.face_encodings(resized_image, face_locations)
-            if not encodings:
-                print("Could not generate face encoding")
-                return False, "Could not generate face encoding"
-
-            # Use the first encoding found
-            encoding = encodings[0]
-
+            ok, message, encodings = validate_face_image(image)
+            if not ok:
+                return False, message
+            encoding = np.array(encodings, dtype=np.float32)
             db = get_database(company_code)
             collection = db[f"encodings_{company_code}"]
-            collection.create_index("employee_code", unique=True)
 
+            collection.create_index("employee_code", unique=True)
             cashe = FaceIndexManager(company_code)
             # Upsert the encoding in the database
             result = cashe.search(encoding, k=1, threshold=0.4)

@@ -20,10 +20,24 @@ class UserModel():
     def __init__(self, compony_code):
         self.db = get_database(compony_code)
 
-    def get_all_users(self, compony_code):
+    def get_all_users(self, compony_code, limit, offset, search=None):
         collection = self.db[f'encodings_{compony_code}']
+        query = {}
+        if search:
+            query = {
+                "$or": [
+                    {"employee_code": {"$regex": search, "$options": "i"}},
+                    {"fullname": {"$regex": search, "$options": "i"}},
+                ]
+            }
+        cursor = (
+            collection.find(query, {"_id": 0, "encodings": 0})
+            .skip(offset)
+            .limit(limit)
+        )
 
-        return collection.find({}, {"_id": 0, "encodings": 0}).to_list()
+        total = collection.count_documents(query)
+        return {"data": cursor.to_list(length=limit), "limit": limit, "offset": offset, "total": total}
 
     def edit_user_details(self, compony_code, editable_details):
         available_actions = ['E', 'D']
@@ -103,7 +117,7 @@ class UserModel():
                     "date": starting_at,
                     "company_code": compony_code,
                     "created_at": datetime.utcnow(),
-                    "log_details":[]
+                    "log_details": []
                 }
             }, upsert=True)
             print("success")
@@ -122,7 +136,7 @@ class UserModel():
             _filter, {"_id": 0, "log_details": 0}).to_list()
         return employee_log_list
 
-    def get_attandance_report_all(self, compony_code, starting_date, ending_date):
+    def get_attandance_report_all(self, compony_code, starting_date, ending_date, limit, offset, search=None):
         db = self.db
         start = datetime.strptime(starting_date, "%Y-%m-%d")
         end = datetime.strptime(ending_date, "%Y-%m-%d")
@@ -143,8 +157,22 @@ class UserModel():
             month_end = min(end, next_month)
 
             try:
-                existing_users = db[f"encodings_{compony_code}"].find(
-                    {}).to_list()
+                query = {}
+                if search:
+                    query = {
+                        "$or": [
+                            {"employee_code": {"$regex": search, "$options": "i"}},
+                            {"employee_name": {"$regex": search, "$options": "i"}},
+                        ]
+                    }
+                cursor = (
+                    db[f"encodings_{compony_code}"].find(
+                        query, {"_id": 0, "encodings": 0})
+                    .skip(offset)
+                    .limit(limit)
+                )
+                existing_users = cursor.to_list(length=limit)
+                total_count = db[f"encodings_{compony_code}"].count_documents(query)
 
                 for user in existing_users:
                     _filter = {"date": {
@@ -168,4 +196,4 @@ class UserModel():
 
             current = next_month
 
-        return all_results
+        return {"data": all_results, "total": total_count, "limit": limit, "offset": "offset"}
