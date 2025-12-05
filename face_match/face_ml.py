@@ -11,8 +11,8 @@ import uuid
 # This is the class we created earlier
 from .faiss_manager import FaceIndexManager
 
-WORKING_HOURES = 8
-WORKING_SECONDS = 8 * 60 * 60
+WORKING_HOURES = 9
+WORKING_SECONDS = 9 * 60 * 60
 EXCEPTION_SECONDS = 300
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 uploads_path = os.path.join(BASE_DIR, "uploads")
