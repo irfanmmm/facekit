@@ -50,6 +50,7 @@ app_logger.setLevel(logging.INFO)
 
 @app.before_request
 def log_request_body():
+    ip = request.access_route[0] if request.access_route else request.remote_addr
     if request.content_type and "multipart/form-data" in request.content_type:
         # Avoid printing file binary content
         file_info = []
@@ -60,10 +61,9 @@ def log_request_body():
                 "size": len(file.read())
             })
             file.seek(0)  # reset pointer
-
-        app.logger.info(f"REQUEST | {request.method} {request.path} | FILES: {file_info}")
+        app.logger.info(f"REQUEST | {request.method} USER_IP | {ip} {request.path} | FILES: {file_info}")
     else:
-        app.logger.info(f"REQUEST | {request.method} {request.path} | BODY: {request.get_data()}")
+        app.logger.info(f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {request.get_data()}")
 
 
 @app.after_request
