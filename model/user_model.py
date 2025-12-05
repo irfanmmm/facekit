@@ -162,7 +162,7 @@ class UserModel():
                     query = {
                         "$or": [
                             {"employee_code": {"$regex": search, "$options": "i"}},
-                            {"employee_name": {"$regex": search, "$options": "i"}},
+                            {"fullname": {"$regex": search, "$options": "i"}},
                         ]
                     }
                 cursor = (
@@ -196,4 +196,4 @@ class UserModel():
 
             current = next_month
 
-        return {"data": all_results, "total": total_count, "limit": limit, "offset": "offset"}
+        return {"data": all_results, "total": total_count, "limit": limit, "offset": offset}

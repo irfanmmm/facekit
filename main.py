@@ -342,9 +342,9 @@ def attandance_report_all():
     ending_date = data.get("ending_date")
     if not all([starting_date, ending_date]):
         return jsonify({"message": "date is requerd"})
-    limit = user.get('limit')
-    offset = user.get('offset')
-    search = user.get('search') if user.get('search') else None
+    limit = data.get('limit')
+    offset = data.get('offset')
+    search = data.get('search') if data.get('search') else None
     if not limit:
         limit = 10
     if not offset:
