@@ -18,8 +18,16 @@ from datetime import datetime, timezone, timedelta
 from model.database import get_database
 from logging.handlers import RotatingFileHandler
 
+import face_recognition as fs
+
+import base64
+import numpy as np
+import cv2
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 def now_ist_str():
@@ -52,11 +60,29 @@ app_logger.setLevel(logging.INFO)
 @app.before_request
 def log_request_body():
     ip = request.access_route[0] if request.access_route else request.remote_addr
-    if request.content_type and "multipart/form-data" in request.content_type:
-        pass
-    else:
+    raw_body = request.get_data(as_text=True)
+
+    try:
+        data = request.get_json(silent=True)
+
+        if isinstance(data, dict) and "base64" in data:
+            # Remove base64 only from log
+            masked = data.copy()
+            masked["base64"] = "<BASE64_CONTENT_REMOVED>"
+            app.logger.info(
+                f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {masked}"
+            )
+        else:
+            # Log full JSON or raw body directly
+            app.logger.info(
+                f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
+            )
+
+    except Exception:
+        # If not JSON (form-data, text, file upload)
         app.logger.info(
-            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {request.get_data()}")
+            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
+        )
 
 
 @app.after_request
@@ -67,16 +93,12 @@ def after_request(response):
         duration = time.time() - start_time
     except Exception:
         duration = 0
-
-    # Get response data (decode from bytes)
     try:
         response_data = response.get_data(as_text=True)
+        ip = request.access_route[0] if request.access_route else request.remote_addr
+        app.logger.info(f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {response_data}")
     except Exception:
         response_data = "<unable to read response>"
-    app.logger.info(
-        f"RESPONSE | {request.method} {request.path} | STATUS: {response.status_code} "
-        f"| TIME: {duration}s | BODY: {response_data}"
-    )
     return response
 
 
@@ -171,49 +193,56 @@ def set_branches():
 @jwt_required
 def add_employee_face():
     user = request.user
-    if 'file' in request.files:
-        data = request.form
-        file = request.files.get('file')
-        fullname = data.get('fullname')
-        employeecode = data.get('employeecode')
-        compony_code = user.get('compony_code')
 
-        branch_requerd = False
-        for settings in user.get("settings", []):
-            if settings.get("setting_name") == "Branch Management":
-                branch_requerd = settings.get("value", False)
-                branch = data.get('branch')
-                if branch_requerd and not branch:
-                    return jsonify({"message": "Branch is requerd"})
-            if settings.get("setting_name") == "Agency Management":
-                agency_requerd = settings.get("value", False)
-                agency = data.get('agency')
-                if agency_requerd and not agency:
-                    return jsonify({"message": "Agency is requerd"})
+    data = request.get_json()
 
-        if not all([fullname, employeecode, compony_code]):
-            return jsonify({"error": "Missing required fields"})
-        validate = Validate(compony_code, employeecode,
-                            isAdmin=user.get("is_admin", False))
-        validate_user, user = validate.validate_employee()
-        if validate_user:
-            return jsonify({"message": "User already exists in Face Database"})
-        status, message = attendance.update_face(
-            employee_code=employeecode, branch=branch, agency=agency, add_img=file, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
-        if status:
-            return jsonify({"message": "success"})
-        return jsonify({"message": "Failed" if not message else message})
-    return jsonify({"message": "file is missing"})
+    base64 = data.get('base64')
+    fullname = data.get('fullname')
+    employeecode = data.get('employeecode')
+    compony_code = user.get('compony_code')
+
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+
+    branch_requerd = False
+    for settings in user.get("settings", []):
+        if settings.get("setting_name") == "Branch Management":
+            branch_requerd = settings.get("value", False)
+            branch = data.get('branch')
+            if branch_requerd and not branch:
+                return jsonify({"message": "Branch is requerd"})
+        if settings.get("setting_name") == "Agency Management":
+            agency_requerd = settings.get("value", False)
+            agency = data.get('agency')
+            if agency_requerd and not agency:
+                return jsonify({"message": "Agency is requerd"})
+
+    if not all([fullname, employeecode, compony_code, base64]):
+        return jsonify({"error": "Missing required fields"})
+
+    validate = Validate(compony_code, employeecode,
+                        isAdmin=user.get("is_admin", False))
+    validate_user, user = validate.validate_employee()
+    if validate_user:
+        return jsonify({"message": "User already exists in Face Database"})
+    status, message = attendance.update_face(
+        employee_code=employeecode, branch=branch, agency=agency, add_img=base64, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
+    message if message else "somthing went wrong"
+    if status:
+        return jsonify({"message": message})
+    return jsonify({"message": message})
 
 
 @app.route("/compare-face", methods=['POST'])
 @jwt_required
 def comare_face():
     user = request.user
-    if 'file' not in request.files:
-        return jsonify({"message": "File is missing"}), 200
+    data = request.get_json()
 
-    file = request.files['file']
+    if not data:
+        return jsonify({
+            "error": "JSON body error"
+        }), 400
 
     location_settings = False
     individual_login = False
@@ -226,17 +255,13 @@ def comare_face():
         elif settings.get("setting_name") == "Office Kit Integration":
             officekit_user = settings.get("value", False)
 
+    latitude = 0
+    longitude = 0
     if location_settings:
-        latitude = request.form.get('latitude')
-        longitude = request.form.get('longitude')
-        left = request.form.get('left')
-        right = request.form.get('right')
-        bottom = request.form.get('bottom')
-        top = request.form.get('top')
-        width = request.form.get('width')
-        height = request.form.get('height')
+        latitude = data.get('latitude')
+        longitude = data.get('longitude')
 
-        if not all([latitude, longitude, left, right, top, bottom, width, height]):
+        if not all([latitude, longitude]):
             return jsonify({"message": "Missing data"}), 200
         try:
             latitude = float(latitude)
@@ -244,35 +269,211 @@ def comare_face():
         except:
             return jsonify({"message": "Invalid location"}), 200
 
-        face_paramiter = (int(left), int(right), int(top),
-                          int(bottom), int(width), int(height))
+    base64 = data.get("base64")
+    boundry = data.get("boundry")
 
-        success, result = attendance.compare_faces(
-            base_img=file,
-            company_code=user.get("compony_code"),
-            latitude=latitude,
-            longitude=longitude,
-            # face_paramiter=face_paramiter
-        )
+    if not base64:
+        return jsonify({"message": "Missing data"}), 200
+    success, result = attendance.compare_faces(
+        base_img=base64,
+        company_code=user.get("compony_code"),
+        latitude=latitude,
+        longitude=longitude,
+    )
 
-        if success:
-            return jsonify({"message": "success", "details": result}), 200
-        else:
-            return jsonify({"message": result}), 200
+    if success:
+        return jsonify({"message": "success", "details": result}), 200
     else:
-        success, result = attendance.compare_faces(
-            base_img=file,
-            company_code=user.get("compony_code"),
-            latitude=None,
-            longitude=None,
-            individual_login=individual_login,
-            officekit_user=officekit_user
-        )
+        return jsonify({"message": result}), 200
 
-        if success:
-            return jsonify({"message": "success", "details": result}), 200
-        else:
-            return jsonify({"message": result}), 200
+
+@app.route("/compare-face-test", methods=['POST'])
+def campare_face_test():
+    import face_recognition as fs
+
+    data = request.json
+    base64_img = data.get("base64")
+    boundary = data.get("boundry")
+
+    if not base64_img or not boundary:
+        return jsonify({"error": "base64 or boundary missing"}), 400
+
+    # Strip header
+    if "," in base64_img:
+        base64_img = base64_img.split(",")[1]
+
+    # Decode Base64
+    try:
+        img_bytes = base64.b64decode(base64_img)
+    except:
+        return jsonify({"error": "Invalid base64"}), 400
+
+    # Convert to image
+    np_arr = np.frombuffer(img_bytes, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    if image is None:
+        return jsonify({"error": "Invalid image"}), 400
+
+    # RGB
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # h, w, _ = image.shape
+
+    # # Expand MLKit bounding box (30% recommended)
+    # pad = int(min(boundary["width"], boundary["height"]) * 0.30)
+
+    # top = max(0, boundary["top"] - pad)
+    # left = max(0, boundary["left"] - pad)
+    # bottom = min(h, boundary["top"] + boundary["height"] + pad)
+    # right = min(w, boundary["left"] + boundary["width"] + pad)
+
+    # fr_box = [(top, right, bottom, left)]
+
+    fr_box = fs.face_locations(image_rgb)
+
+    # Generate encoding
+    encodings = fs.face_encodings(image_rgb, fr_box)
+    if not encodings:
+        return jsonify({"error": "Encoding failed"}), 400
+
+    encoding = encodings[0]
+    encoding = encoding / np.linalg.norm(encoding)    # normalize
+
+    compony_code = "A337"
+    db = get_database(compony_code)
+    collection = db[f'encodings_{compony_code}']
+
+    best_match = None
+    best_distance = 999
+
+    for user in collection.find({}, {"_id": 0}):
+        enc = np.array(user["encodings"], dtype=float)
+        enc = enc / np.linalg.norm(enc)   # normalize stored encoding
+
+        # Calculate real face distance
+        dist = np.linalg.norm(enc - encoding)
+
+        if dist < best_distance:
+            best_distance = dist
+            best_match = user
+
+    # Match threshold
+    if best_distance <= 0.40:
+        return jsonify({
+            "message": "success",
+            "details": {"fullname": best_match["fullname"]},
+            "distance": best_distance
+        })
+
+    return jsonify({
+        "message": "face not matching",
+        "distance": best_distance,
+        "message": "face not matching"
+    })
+
+
+@app.route("/update-face-test", methods=["POST"])
+def update_face_test():
+    data = request.json
+    base64_img = data.get("base64")
+    boundary = data.get("boundry")
+    fullname = data.get("fullname")
+    agency = data.get("agency")
+    branch = data.get("branch")
+    employeecode = data.get("employeecode")
+
+    compony_code = "A337"
+    db = get_database(compony_code)
+    collection = db[f"encodings_{compony_code}"]
+
+    # ---- VALIDATE INPUT ----
+    if not base64_img or not boundary:
+        return jsonify({"error": "base64 or boundary missing"}), 400
+
+    # Remove possible header
+    if "," in base64_img:
+        base64_img = base64_img.split(",")[1]
+
+    # Base64 → bytes
+    try:
+        img_bytes = base64.b64decode(base64_img)
+    except:
+        return jsonify({"error": "Invalid base64"}), 400
+
+    # Bytes → numpy image
+    np_arr = np.frombuffer(img_bytes, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    if image is None:
+        return jsonify({"error": "Invalid image"}), 400
+
+    # Convert BGR → RGB
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # # ---- FIX MLKIT BOUNDARY ----
+    # h, w, _ = image.shape
+    # pad = int(min(boundary["width"], boundary["height"]) * 0.20)
+
+    # top = max(0, int(boundary["top"] - pad))
+    # left = max(0, int(boundary["left"] - pad))
+    # bottom = min(h, int(boundary["top"] + boundary["height"] + pad))
+    # right = min(w, int(boundary["left"] + boundary["width"] + pad))
+
+    # Validate boundary
+    # if top >= bottom or left >= right:
+    #     return jsonify({"error": "Invalid face boundary"}), 400
+
+    # face_recognition box format
+    # fr_box = [(top, right, bottom, left)]
+
+    fr_box = fs.face_locations(rgb)
+
+    if len(fr_box) > 1:
+        return jsonify({"message": "faild"})
+
+    # ---- GET FACE ENCODING ----
+    encodings = fs.face_encodings(rgb, fr_box)
+
+    if not encodings:
+        return jsonify({"error": "Face not detected properly"}), 400
+
+    encoding = encodings[0].astype(float)
+
+    # Normalize encoding → increases accuracy
+    encoding = encoding / np.linalg.norm(encoding)
+
+    # ---- CHECK IF EMPLOYEE ALREADY EXISTS ----
+    existing = collection.find_one({"employee_code": employeecode})
+
+    if existing:
+        # Append encoding → multiple samples give better matching
+        new_enc_list = existing.get("encodings", encoding.tolist())
+        # new_enc_list.append(encoding.tolist())
+
+        collection.update_one(
+            {"employee_code": employeecode},
+            {
+                "$set": {
+                    "fullname": fullname,
+                    "branch": branch,
+                    "agency": agency,
+                    "encodings": new_enc_list,
+                }
+            }
+        )
+        return jsonify({"message": "Face updated successfully"})
+
+    # ---- INSERT NEW EMPLOYEE ----
+    data = {
+        "company_code": compony_code,
+        "employee_code": employeecode,
+        "fullname": fullname,
+        "branch": branch,
+        "agency": agency,
+        "encodings_list": encoding.tolist()  # store as list
+    }
+
+    collection.insert_one(data)
+
+    return jsonify({"message": "success"})
 
 
 @app.route("/all-employees", methods=['POST'])
@@ -350,7 +551,6 @@ def attandance_report_all():
     if not offset:
         offset = 0
 
-    
     userdetails = UserModel(compony_code)
     data = userdetails.get_attandance_report_all(
         compony_code=compony_code, starting_date=starting_date, ending_date=ending_date, limit=limit, offset=offset, search=search)
@@ -389,28 +589,35 @@ def edit_attandance():
 @app.route("/edit-user", methods=['POST'])
 @jwt_required
 def edit_user():
-    data = request.form
-    compony_code = data.get("compony_code")
+    user = request.user
+    compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
-    editable_details_raw = data.get("editable_details")
-    editable_details = json.loads(
-        editable_details_raw) if editable_details_raw else []
-    editable_details_files = []
-    for i, emp in enumerate(editable_details):
-        editable_details_files.append({
-            "employee_id": emp['employee_code'],
-            "branch": emp["branch"],
-            "action": emp['action'],
-            "full_name": emp['full_name'] if emp['full_name'] else None,
-            "file": request.files.get(f"file_{i}") if request.files.get(f"file_{i}") else None
-        })
-    if editable_details_files:
-        userdetails = UserModel(compony_code)
-        message = userdetails.edit_user_details(
-            compony_code, editable_details_files)
-        return jsonify({"message": message})
-    return jsonify({"message": "Failed"})
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+
+    editable_details = data.get("editable_details")
+    base64 = data.get("base64", None)
+
+    allowed_fields = ["employee_code", "action",
+                      "full_name", "branch", "agency"]
+
+    action = editable_details.get("action")
+
+    if action == 'E':
+        for field in allowed_fields:
+            if field not in editable_details or not editable_details[field]:
+                return jsonify({"message": f"{field} is required"})
+    elif action == 'D':
+        if not editable_details.get("employee_code"):
+            return jsonify({"message": "employee_code is required"})
+
+    userdetails = UserModel(compony_code)
+    message = userdetails.edit_user_details(
+        compony_code, editable_details, base64=base64)
+    return jsonify({"message": message})
 
 
 @app.route("/logs", methods=['POST'])

@@ -8,8 +8,9 @@ from typing import Tuple, Dict, Any
 from model.database import get_database
 from connection.validate_officekit import Validate
 import uuid
-# This is the class we created earlier
+from geopy.distance import geodesic
 from .faiss_manager import FaceIndexManager
+import base64
 
 
 WORKING_HOURES = 9
@@ -26,11 +27,11 @@ logger = logging.getLogger("face_ml")
 
 
 def is_user_in_radius(branch_lat, branch_lng, user_lat, user_lng, radius_meters):
-    from geopy.distance import geodesic
     branch = (branch_lat, branch_lng)
     user = (user_lat, user_lng)
     distance = geodesic(branch, user).meters
     return distance <= radius_meters, distance
+
 
 def save_employee_image(image):
     filename = f"{uuid.uuid4().hex}.jpg"
@@ -42,37 +43,23 @@ def save_employee_image(image):
 
 def validate_face_image(image):
     h, w = image.shape[:2]
-    if h < 480 or w < 480:
-        return False, "Image resolution too low. Minimum required is 480x480.", None
+    if h < 320 or w < 320:
+        return False, "Image resolution too low. Minimum required is 320x320.", None
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray_eq = cv2.equalizeHist(gray)
     blur_score = cv2.Laplacian(gray_eq, cv2.CV_64F).var()
 
-    if blur_score < 60:
+    if blur_score < 5:
         return False, f"Image is blurry (score: {blur_score:.2f}).", None
 
     brightness = np.mean(gray)
-    if brightness < 60:
+    if brightness < 20:
         return False, "Image too dark. Increase lighting.", None
-    if brightness > 200:
+    if brightness > 250:
         return False, "Image too bright. Reduce lighting.", None
 
-    edges = cv2.Canny(gray, 30, 100)
-
-    edge_pixels = np.sum(edges > 0)
-    total_pixels = gray.size
-
-    edge_ratio = edge_pixels / total_pixels
-
-    if edge_ratio < 0.005:
-        return False, "Background too bright or washed out.", None
-
-    if edge_ratio > 0.30:
-        return False, "Background too noisy or cluttered.", None
-
-    small = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
-    face_locations = fr.face_locations(small)
+    face_locations = fr.face_locations(image)
 
     if not face_locations:
         return False, "No face detected.", None
@@ -85,38 +72,19 @@ def validate_face_image(image):
     face_w = right - left
     face_h = bottom - top
 
-    if face_w < 150 or face_h < 150:
-        return False, "Face too small. Move closer to the camera.", None
-
-    face_crop = image[top:bottom, left:right]
-    face_gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
-
-    mouth_start = int(face_gray.shape[0] * 0.60)
-    mouth_end = int(face_gray.shape[0] * 0.90)
-
-    mouth_region = face_gray[mouth_start:mouth_end, :]
-
-    if mouth_region.size == 0 or mouth_region.shape[0] < 10:
-        return False, "Unable to detect mouth region. Adjust your face.", None
-    mouth_edges = cv2.Canny(mouth_region, 20, 60)
-    edge_ratio_mouth = np.sum(mouth_edges > 0) / mouth_region.size
-
-    if edge_ratio_mouth < 0.008:
-        return False, "Face obstruction detected (mask/sunglasses/cap).", None
-
-    MIN_FACE_SIZE = 90
+    MIN_FACE_SIZE = 60
 
     if face_w < MIN_FACE_SIZE or face_h < MIN_FACE_SIZE:
-        return False, "Face too small or far. Please move closer to camera."
+        return False, "Face too small. Move closer to the camera.", None
 
     aspect_ratio = face_w / face_h
-    if aspect_ratio < 0.6 or aspect_ratio > 1.8:
-        return False, "Face tilted too much. Look straight at camera."
+    if aspect_ratio < 0.5 or aspect_ratio > 2.0:
+        return False, "Face tilted too much. Look straight at camera.", None
 
-    encodings = fr.face_encodings(
-        small, face_locations, num_jitters=1)
+    encodings = fr.face_encodings(image, face_locations, num_jitters=1)
     if not encodings:
-        return False, "Face encoding failed"
+        return False, "Face encoding failed.", None
+
     return True, face_locations, encodings
 
 
@@ -126,21 +94,26 @@ class FaceAttendance:
 
     def compare_faces(self, base_img, company_code, latitude, longitude):
         try:
-            # 1. Read and decode image
-            file_bytes = np.frombuffer(base_img.read(), np.uint8)
-            image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            save_employee_image(image)
-            if image is None:
-                return False, "Invalid image format"
+            try:
+                img_bytes = base64.b64decode(base_img)
+            except:
+                return False, "invalid image"
 
-            ok, message, encodings = validate_face_image(image)
+            np_arr = np.frombuffer(img_bytes, np.uint8)
+            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if image is None:
+                return "Invalid image"
+
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            ok, message, encodings = validate_face_image(image_rgb)
 
             if not ok:
                 return False, message
 
             current_encoding = encodings[0]
 
-            MAX_ALLOWED_DISTANCE = 0.45
+            MAX_ALLOWED_DISTANCE = 0.40
             manager = FaceIndexManager(company_code)
             candidates = manager.search(
                 current_encoding, k=10, threshold=MAX_ALLOWED_DISTANCE)
@@ -173,11 +146,11 @@ class FaceAttendance:
                         return False, f"Outside allowed area ({dist:.1f}m away)"
 
             # 8. Log Attendance
-            return self._log_attendance(company_code, employee, best["distance"])
+            return self._log_attendance(company_code, employee, best["distance"], db)
 
         except Exception as e:
             print(f"[FaceAttendance] Error: {e}")
-            
+
             logger.info(f"ERROR: {e}")
             import traceback
             traceback.print_exc()
@@ -185,25 +158,37 @@ class FaceAttendance:
 
     def update_face(self, employee_code, branch, agency, add_img, company_code, fullname, existing_office_kit_user=None):
         try:
-            file_bytes = np.frombuffer(add_img.read(), np.uint8)
-            image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            save_employee_image(image)
+            try:
+                img_bytes = base64.b64decode(add_img)
+            except:
+                return False, "invalid image"
+            np_arr = np.frombuffer(img_bytes, np.uint8)
+            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if image is None:
-                return False, "Invalid image format"
-            ok, message, encodings = validate_face_image(image)
+                return "Invalid image"
+
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            filename = f"user_{employee_code}_{branch}_{agency}_{fullname}_{company_code}.jpg"
+            filepath = os.path.join(uploads_path, filename)
+            cv2.imwrite(filepath, image)
+
+            ok, message, encodings = validate_face_image(image_rgb)
+
             if not ok:
                 return False, message
-            encoding = np.array(encodings, dtype=np.float32)
-            db = get_database(company_code)
-            collection = db[f"encodings_{company_code}"]
 
-            collection.create_index("employee_code", unique=True)
+            current_encoding = encodings[0]
+
+            MAX_ALLOWED_DISTANCE = 0.40
             cashe = FaceIndexManager(company_code)
-            # Upsert the encoding in the database
-            result = cashe.search(encoding, k=1, threshold=0.4)
-            if result:
-                print("This face already exists in the database.")
+            candidates = cashe.search(
+                current_encoding, k=10, threshold=MAX_ALLOWED_DISTANCE)
+
+            if candidates:
                 return False, "This face already exists in the database."
+
+            encoding = np.array(current_encoding, dtype=np.float32)
+
             data = {
                 "company_code": company_code,
                 "employee_code": employee_code,
@@ -213,7 +198,12 @@ class FaceAttendance:
                 "existing_user_officekit": existing_office_kit_user,
                 "encodings": encoding.tolist()
             }
+
+            db = get_database(company_code)
+            collection = db[f"encodings_{company_code}"]
+
             result = collection.insert_one(data)
+
             cashe.add_employee({
                 "company_code": company_code,
                 "employee_code": employee_code,
@@ -224,58 +214,54 @@ class FaceAttendance:
                 "encodings": encoding.tolist(),
                 "_id": result.inserted_id
             })
-            return True, "Face encoding updated successfully"
+            return True, "success"
 
         except Exception as e:
             print(f"Error in update_face: {e}")
             logger.info(f"ERROR: {e}")
             return False, "System error during face update"
 
-    def edit_user_details(self, employee_code, emp_face, compony_code, existing_officekit_user=None):
+    def edit_employee_face(self, employee_code, emp_face, compony_code, existing_officekit_user=None):
         try:
+            try:
+                img_bytes = base64.b64decode(emp_face)
+            except:
+                return False, "invalid image"
+
+            np_arr = np.frombuffer(img_bytes, np.uint8)
+            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if image is None:
+                return False, "Invalid image"
+
+            filename = f"user_{employee_code}.jpg"
+            filepath = os.path.join(uploads_path, filename)
+            cv2.imwrite(filepath, image)
+
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            ok, message, encodings = validate_face_image(image_rgb)
+
+            if not ok:
+                return False, message
+
+            if not encodings:
+                return False, "Could not generate face encoding"
+
+            current_encoding = encodings[0]
+
+            encoding = np.array(current_encoding, dtype=np.float32)
+
             db = get_database(compony_code)
-            users = db["users"]
+            enc_collection = db[f"encodings_{compony_code}"]
+            enc_collection.create_index("employee_code", unique=True)
 
-            update_data = {}
-            if emp_face:
-                file_bytes = np.frombuffer(emp_face.read(), np.uint8)
-                image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
-                if image is None:
-                    return False, "Invalid image format"
-
-                resized_image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
-                locations = fr.face_locations(resized_image)
-
-                if not locations:
-                    return False, "No faces found in the image"
-
-                encodings = fr.face_encodings(resized_image, locations)
-
-                if not encodings:
-                    return False, "Could not generate face encoding"
-
-                encoding = encodings[0]
-
-                enc_collection = db[f"encodings_{compony_code}"]
-                enc_collection.create_index("employee_code", unique=True)
-
-                cache = FaceIndexManager(compony_code)
-
-                # Check duplicate face
-                result = cache.search(encoding, k=1, threshold=0.4)
-                if result:
-                    return False, "This face already exists in the database."
-
-                enc_collection.update_one(
-                    {"employee_code": employee_code, "company_code": compony_code},
-                    {"$set": {"encodings": encoding.tolist()}},
-                    upsert=True
-                )
-
-                cache.rebuild_index()
-
-                update_data["face_updated"] = True
+            enc_collection.update_one(
+                {"employee_code": employee_code, "company_code": compony_code},
+                {"$set": {"encodings": encoding.tolist()}},
+                upsert=True
+            )
+            cache = FaceIndexManager(compony_code)
+            cache.rebuild_index()
 
             return True, "User details updated successfully"
 
@@ -284,12 +270,10 @@ class FaceAttendance:
             logger.info(f"ERROR: {e}")
             return False, "System error while updating user"
 
-    def _log_attendance(self, company_code: str, employee: dict, distance: float):
+    def _log_attendance(self, company_code: str, employee: dict, distance: float, db):
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow_start = today_start + timedelta(days=1)
-
-        db = get_database(company_code)
         collection_name = f"attandance_{company_code}_{now.strftime('%Y-%m')}"
         collection = db[collection_name]
 
@@ -365,12 +349,6 @@ class FaceAttendance:
                 "present": "",
                 "log_details": [log_entry]
             })
-
-        # Validate & log to OfficeKit
-        validate = Validate(company_code, employee["employee_code"])
-        valid, user_details = validate.validate_employee()
-        if user_details:
-            validate.insert_log(direction)
 
         return True, {
             "fullname": employee["fullname"],

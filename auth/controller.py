@@ -94,7 +94,6 @@ def login_user():
 
 """individual syastem admin add user without add face and password """
 
-
 @auth.route("/add-employee", methods=['POST'])
 @jwt_required
 def add_user_in_admin():

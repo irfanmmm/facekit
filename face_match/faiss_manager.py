@@ -103,15 +103,16 @@ class FaceIndexManager:
             self.rebuild_index()
             return
 
-        enc = np.array(employee_doc["encodings"], dtype=np.float32).reshape(1, -1)
+        enc = np.array(employee_doc["encodings"],
+                       dtype=np.float32).reshape(1, -1)
         self.index.add(enc)
 
         new_id = len(self.employee_map)
         self.employee_map.append(employee_doc)
         self.vector_to_doc_id[new_id] = str(employee_doc["_id"])
         from main import app
-        app.logger.info(f"Worker post_fork: initializing FAISS indexes : {new_id}")
-            
+        app.logger.info(
+            f"Worker post_fork: initializing FAISS indexes : {new_id}")
 
     def remove_employee(self, mongo_id: str):
         with self.modify_lock:

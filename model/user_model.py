@@ -22,14 +22,21 @@ class UserModel():
 
     def get_all_users(self, compony_code, limit, offset, search=None):
         collection = self.db[f'encodings_{compony_code}']
-        query = {}
+
+        base_filter = {"is_delete": {"$ne": True}}
+
         if search:
-            query = {
+            search_filter = {
                 "$or": [
                     {"employee_code": {"$regex": search, "$options": "i"}},
                     {"fullname": {"$regex": search, "$options": "i"}},
                 ]
             }
+
+            query = {"$and": [base_filter, search_filter]}
+        else:
+            query = base_filter
+
         cursor = (
             collection.find(query, {"_id": 0, "encodings": 0})
             .skip(offset)
@@ -37,59 +44,80 @@ class UserModel():
         )
 
         total = collection.count_documents(query)
-        return {"data": cursor.to_list(length=limit), "limit": limit, "offset": offset, "total": total}
 
-    def edit_user_details(self, compony_code, editable_details):
+        return {
+            "data": cursor.to_list(length=limit),
+            "limit": limit,
+            "offset": offset,
+            "total": total
+        }
+
+    def edit_user_details(self, compony_code, editable_details, base64=None):
         available_actions = ['E', 'D']
 
-        if not isinstance(editable_details, list) or not editable_details:
+        if not isinstance(editable_details, dict) or not editable_details:
             return "editable_details must be a non-empty list"
-        for details in editable_details:
-            try:
-                if details['action'] not in available_actions:
-                    return "action not available"
 
-                if details['action'] == 'E':
-                    if details['file']:
-                        face_details = FaceAttendance()
-                        status = face_details.edit_user_details(
-                            employee_code=details['employee_id'],
-                            emp_face=details['file'],
-                            compony_code=compony_code,
-                        )
-                        if status:
-                            return "success"
-                        return "Faile"
-                    else:
-                        colloction = self.db[f"encodings_{compony_code}"]
-                        colloction.update_one(
-                            {"employee_code": details['employee_id']},
-                            {"$set": {
-                                "company_code": compony_code,
-                                "employee_code": details['employee_id'],
-                                "fullname": details['full_name'],
-                                "branch": details['branch'],
-                            }},
-                            upsert=True
-                        )
-                        return "success"
+        action = editable_details['action']
 
-                elif details['action'] == 'D':
-                    colloction = self.db[f"encodings_{compony_code}"]
-                    _filter = {
-                        "employee_code": details['employee_id']
+        if action in available_actions:
+            db = get_database(compony_code)
+            collection = db[f'encodings_{compony_code}']
+            user_id = editable_details.get('employee_code')
+            user = collection.find_one(
+                {"employee_code": user_id})
+            if not user:
+                return "Employee not exist"
+
+            if action == 'E':
+                if base64:
+                    face_details = FaceAttendance()
+                    status, message = face_details.edit_employee_face(
+                        employee_code=editable_details['employee_code'],
+                        emp_face=base64,
+                        compony_code=compony_code,
+                    )
+                    if not status:
+                        return message
+
+                branch = editable_details.get('branch', None)
+                agency = editable_details.get('agency', None)
+                fullname = editable_details.get('full_name', None)
+
+                _filter = {
+                    "_id": user.get("_id"),
+                }
+                result = collection.update_one(_filter, {
+                    "$set": {
+                        "company_code": compony_code,
+                        "employee_code": user_id,
+                        "branch": branch,
+                        "agency": agency,
+                        "fullname": fullname
                     }
-                    result = colloction.delete_one(_filter)
-                    if result.deleted_count > 0:
-                        cache = FaceIndexManager(compony_code)
-                        cache.rebuild_index()
-                        return "success"
-                    else:
-                        return "Employee not found for deletion"
-            except Exception as e:
-                return f"Exception occurred: {str(e)}"
+                })
 
-        return "success"
+                if result.matched_count == 0:
+                    return "No document found to update"
+
+                return "success"
+
+            if action == "D":
+                _filter = {
+                    "_id": user.get("_id"),
+                }
+                result = collection.update_one(_filter, {
+                    "$set": {
+                        "is_delete": True,
+                        "encodings": None
+                    }
+                })
+                if result.matched_count == 0:
+                    return "No document found to update"
+                cache = FaceIndexManager(compony_code)
+                cache.rebuild_index()
+                return "success"
+        return "Somthing went wrong"
 
     def edit_attandance_report(self, compony_code, emploee_list_with_action, editad_date):
         """ [{'employee_id':'1','action':'P' | 'PL' | 'UL' | 'H'}] """
@@ -172,7 +200,8 @@ class UserModel():
                     .limit(limit)
                 )
                 existing_users = cursor.to_list(length=limit)
-                total_count = db[f"encodings_{compony_code}"].count_documents(query)
+                total_count = db[f"encodings_{compony_code}"].count_documents(
+                    query)
 
                 for user in existing_users:
                     _filter = {"date": {
