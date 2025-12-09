@@ -5,7 +5,7 @@ from flask import Blueprint, app, jsonify, request, Response
 from datetime import datetime, timedelta
 from model.database import get_database
 from middleware.auth_middleware import jwt_required
-from helper.format_duration import format_duration
+from helper.format_duration import compute_working_seconds,format_duration
 
 attandance = Blueprint('attandance', __name__)
 IST_OFFSET = timedelta(hours=5, minutes=30)
@@ -72,15 +72,21 @@ def download_report():
 
         userdetails = usercollection.find_one(
             {"employee_code": record.get("employee_id")}) or {}
+        working_time = record.get("total_working_time", 0)
+        if working_time is None or working_time == 0:
+            working_time = compute_working_seconds(log_details)
+        data_in_output = f' {(record.get("date") + IST_OFFSET).strftime("%Y-%m-%d")}' if record.get("date") else ""
+        first_in_output =f' {first_in.strftime("%Y-%m-%d %H:%M:%S")}' if first_in else ""
+        last_out_output = f' {last_out.strftime("%Y-%m-%d %H:%M:%S")}' if last_out else ""
         writer.writerow([
             record.get("employee_id"),
             record.get("fullname"),
             userdetails.get("branch", "N/A"),
             userdetails.get("agency", "N/A"),
-            (record.get("date") + IST_OFFSET).strftime('%Y-%m-%d') if record.get("date") else "",
-            first_in.strftime('%Y-%m-%d %H:%M:%S') if first_in else "",
-            last_out.strftime('%Y-%m-%d %H:%M:%S') if last_out else "",
-            format_duration(record.get("total_working_time", 0)),
+            data_in_output,
+            first_in_output,
+            last_out_output,
+            format_duration(working_time),
             record.get("present", "Working"),
         ])
     csv_data = output.getvalue()
