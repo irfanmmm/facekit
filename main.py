@@ -60,6 +60,14 @@ app_logger.setLevel(logging.INFO)
 @app.before_request
 def log_request_body():
     ip = request.access_route[0] if request.access_route else request.remote_addr
+
+    content_type = request.headers.get("Content-Type", "").lower()
+    if "multipart/form-data" in content_type:
+        app.logger.info(
+            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: <FORM-DATA SKIPPED>"
+        )
+        return
+
     raw_body = request.get_data(as_text=True)
 
     try:
