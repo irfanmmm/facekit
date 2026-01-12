@@ -3,13 +3,12 @@ import os
 import time
 import schedule
 import json
-from flask import Flask, render_template, request, jsonify, g
+from flask import Flask, request, jsonify, g
 from face_match.face_ml import FaceAttendance
 from middleware.auth_middleware import jwt_required
 from model.compony_model import ComponyModel
 from model.user_model import UserModel
 from connection.validate_officekit import Validate
-from connection.db_officekit import conn, cursor
 from face_match import init_faiss_indexes
 from admin.controller import admin
 from auth.controller import auth
@@ -74,14 +73,12 @@ def log_request_body():
         data = request.get_json(silent=True)
 
         if isinstance(data, dict) and "base64" in data:
-            # Remove base64 only from log
             masked = data.copy()
             masked["base64"] = "<BASE64_CONTENT_REMOVED>"
             app.logger.info(
                 f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {masked}"
             )
         else:
-            # Log full JSON or raw body directly
             app.logger.info(
                 f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
             )
@@ -112,8 +109,6 @@ def after_request(response):
 
 OFFICE_KIT_API_KEY = "wba1kit5p900egc12weblo2385"
 OFFICE_KIT_PRIMERY_URL = "http://appteam.officekithr.net/api/AjaxAPI/MobileUrl"
-
-# ---------------- DB Connection ----------------
 
 attendance = FaceAttendance()
 
@@ -668,26 +663,22 @@ def home():
 if __name__ == "__main__":
     init_faiss_indexes()
 
-    # db = get_database("A941")
-    # collection = db[f'encodings_A941']
-    # pipeline = [
-    #     {
-    #         "$group": {
-    #             "_id": "$employee_code",
-    #             "count": {"$sum": 1},
-    #             "docs": {"$push": "$$ROOT"}
-    #         }
-    #     },
-    #     {
-    #         "$match": {
-    #             "count": {"$gt": 1}  # Only duplicates
-    #         }
-    #     },
-    #     { "$unwind": "$docs" },
-    #     { "$replaceRoot": { "newRoot": "$docs" } }
-    # ]
+    # db = get_database("A100")
+    # collection = db["encodings_A100"]
+    # branch_collection = db["branch_A100"]
 
-    # duplicates = list(collection.aggregate(pipeline))
-    # # for doc in duplicates:
-    # print(duplicates, "duplicatesduplicatesduplicates")
+    # # Get unique branches from encodings
+    # encoding_branches = set()
+
+    # items =  collection.find({}, {"_id": 0, "encodings": 0}).to_list(length=None)
+    # for item in items:
+    #     if item.get("branch"):
+    #         encoding_branches.add(item["branch"])
+
+
+    # branch_items = branch_collection.find({}, {"_id": 0}).to_list(length=None)
+    # db_branches = {item["branch_name"] for item in branch_items if item.get("branch_name")}
+    # missing_branches = db_branches - encoding_branches
+    # print("Encoding branches count:", len(encoding_branches))
+    # print("Missing branches:", len(missing_branches))
     app.run(debug=True, port=5001, host="0.0.0.0")

@@ -1,4 +1,6 @@
+import tempfile
 import faiss
+import time
 import numpy as np
 import threading
 from typing import Dict, Optional, List
@@ -7,6 +9,9 @@ import os
 import pickle
 from model.database import get_database
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SHARED_DIR = os.path.join(BASE_DIR, "shared_faiss")
+os.makedirs(SHARED_DIR, exist_ok=True)
 
 class FaceIndexManager:
     _instances = {}
@@ -110,6 +115,7 @@ class FaceIndexManager:
         new_id = len(self.employee_map)
         self.employee_map.append(employee_doc)
         self.vector_to_doc_id[new_id] = str(employee_doc["_id"])
+        self.save_to_disk()
         from main import app
         app.logger.info(
             f"Worker post_fork: initializing FAISS indexes : {new_id}")
@@ -118,11 +124,13 @@ class FaceIndexManager:
         with self.modify_lock:
             # Best to rebuild index for FlatL2
             self.rebuild_index()
+            self.save_to_disk()
 
     # -----------------------------------------------------------
     # SAVE / LOAD
     # -----------------------------------------------------------
     def save_to_disk(self, path: str = None):
+        path = self._shared_file()
         if path is None:
             path = f"faiss_index_{self.company_code}.pkl"
 
@@ -132,12 +140,31 @@ class FaceIndexManager:
             data = {
                 "index": faiss.serialize_index(self.index),
                 "employee_map": self.employee_map,
-                "vector_to_doc_id": self.vector_to_doc_id
+                "vector_to_doc_id": self.vector_to_doc_id,
+                "saved_at": time.time(),
             }
-            with open(path, "wb") as f:
-                pickle.dump(data, f)
+
+            dirpath = os.path.dirname(path)
+            fd, tmp_path = tempfile.mkstemp(prefix="tmp_faiss_", dir=dirpath)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    pickle.dump(data, f)
+                # atomic replace
+                os.replace(tmp_path, path)
+            except Exception:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+                raise
+
+            # with open(path, "wb") as f:
+            #     pickle.dump(data, f)
+    def _shared_file(self):
+        return f"{SHARED_DIR}/faiss_index_{self.company_code}.pkl"
 
     def load_from_disk(self, path: str = None):
+        path = self._shared_file()
         if path is None:
             path = f"faiss_index_{self.company_code}.pkl"
 

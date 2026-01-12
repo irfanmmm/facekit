@@ -24,7 +24,8 @@ def init_faiss_indexes():
         collections = db.list_collection_names()
 
         # Find collections like encodings_140, encodings_250 etc
-        encoding_cols = [col for col in collections if col.startswith("encodings_")]
+        encoding_cols = [
+            col for col in collections if col.startswith("encodings_")]
 
         if not encoding_cols:
             print(f"No encoding collections found in DB: {dbname}")
@@ -38,7 +39,14 @@ def init_faiss_indexes():
 
             try:
                 manager = FaceIndexManager(company_code)
-                manager.rebuild_index()
+                if manager.load_from_disk():
+                    print(f"[FAISS] Loaded shared index for {company_code}")
+                else:
+                    print(f"[FAISS] No file → rebuilding for {company_code}")
+                    manager.rebuild_index()
+                    manager.save_to_disk()
+                    print(f"[FAISS] Saved new shared index for {company_code}")
+
                 print(f" ✓ Completed FAISS index for {company_code}")
             except Exception as e:
                 print(f" ❌ Failed to build index for {company_code}: {e}")
