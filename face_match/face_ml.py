@@ -253,7 +253,7 @@ class FaceAttendance:
 
             db = get_database(compony_code)
             enc_collection = db[f"encodings_{compony_code}"]
-            enc_collection.create_index("employee_code", unique=True)
+            # enc_collection.create_index("employee_code", unique=True)
 
             enc_collection.update_one(
                 {"employee_code": employee_code, "company_code": compony_code},

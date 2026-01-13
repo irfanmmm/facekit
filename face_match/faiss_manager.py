@@ -45,6 +45,8 @@ class FaceIndexManager:
             encodings = []
             valid_docs = []
             for doc in docs:
+                if doc.get("is_delete") is True:
+                    continue
                 enc = doc.get("encodings")
                 if enc and len(enc) == 128:
                     encodings.append(np.array(enc, dtype=np.float32))
