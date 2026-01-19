@@ -2,10 +2,10 @@ import faiss
 import numpy as np
 import threading
 from typing import Dict, Optional, List
-from bson import ObjectId
 import os
 import pickle
 from model.database import get_database
+from connection.officekit_punching import OfficeKitPunching
 
 
 class FaceIndexManager:
@@ -25,8 +25,14 @@ class FaceIndexManager:
     def rebuild_index(self):
         """Rebuild FAISS index from DB. Runs under lock to avoid race."""
         with self.modify_lock:
-            db = get_database(self.company_code)
-            collection = db[f'encodings_{self.company_code}']
+            db = get_database('A337')
+            collection = db[f'encodings_A337']
+            sdb = get_database('SettingsDB')
+            settings = sdb[f'settings_A337']
+            val = settings.find_one({
+                "setting_name": "Office Kit Integration"
+            })
+            value = val.get("value")
 
             docs = list(collection.find({}, {
                 "encodings": 1,
@@ -50,6 +56,20 @@ class FaceIndexManager:
                     encodings.append(np.array(enc, dtype=np.float32))
                     valid_docs.append(doc)
 
+                if value:
+                    off = OfficeKitPunching()
+                    emp_code = doc.get("employee_code")
+                    branch = off.retreve_branche_by_user(emp_code)
+                    if branch['branchId'] is not None:
+                        collection.update_one(
+                            {"_id": doc["_id"]},
+                            {
+                                "$set": {
+                                    "branch": branch['branchId'],
+                                }
+                            }
+                        )
+
             if not encodings:
                 self.index = None
                 return
@@ -65,9 +85,6 @@ class FaceIndexManager:
                 i: str(doc["_id"]) for i, doc in enumerate(valid_docs)
             }
 
-    # -----------------------------------------------------------
-    # PARALLEL SEARCH (NO LOCK NEEDED)
-    # -----------------------------------------------------------
     def search(self, query_encoding: np.ndarray, k: int = 5, threshold: float = 0.6):
         """
         Face search — runs without lock.
@@ -116,12 +133,8 @@ class FaceIndexManager:
 
     def remove_employee(self, mongo_id: str):
         with self.modify_lock:
-            # Best to rebuild index for FlatL2
             self.rebuild_index()
 
-    # -----------------------------------------------------------
-    # SAVE / LOAD
-    # -----------------------------------------------------------
     def save_to_disk(self, path: str = None):
         if path is None:
             path = f"faiss_index_{self.company_code}.pkl"

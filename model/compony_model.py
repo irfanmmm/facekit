@@ -1,7 +1,10 @@
 import random
 from model.database import get_database
 from pymongo.errors import DuplicateKeyError
-
+from connection.officekit_onboarding import OnboardingOfficekit
+from utility.jwt_utils import create_token
+from model.database import get_database
+from admin.admin_service.settings import setting
 
 def generate_code():
     """Generate random unique company code like A123"""
@@ -23,6 +26,7 @@ class ComponyModel():
             self.branchcolloction = None
         else:
             self.collection = self.db["compony_details"]
+            # self.settings_colloction = self.db["settings"]
             self.collection.create_index("email", unique=True)
             self.collection.create_index("compony_code", unique=True)
             self.branchcolloction = self.db['branch_details']
@@ -64,18 +68,15 @@ class ComponyModel():
     def _verify(self, compony_code):
         """ verify compony code """
         if self.collection is not None and self.collection.find_one({"compony_code": compony_code, "status": "active"}):
-            from model.database import get_database
             db = get_database("SettingsDB")
             settings_collection = db[f"settings_{compony_code}"]
             settings = settings_collection.find({}, {"_id": 0}).to_list()
             if not settings:
-                from admin.admin_service.settings import setting
                 settings_collection.insert_many(setting)
                 for s in setting:
                     s.pop("_id", None)
 
                 settings = setting
-            from utility.jwt_utils import create_token
             return "success", create_token({"compony_code": compony_code, "settings": settings})
         return "Failed", None
 
@@ -102,19 +103,40 @@ class ComponyModel():
         except DuplicateKeyError as e:
             return False
 
-    def _get_branch(self, compony_code):
+    def _get_branch(self, compony_code, offset=0, limit=10, search=None):
         try:
-            branches = self.db[f'branch_{compony_code}'].find(
-                {}, {"_id": 0}).to_list()
-            return branches
+            settings = get_database("SettingsDB")
+            _filter = {
+                "setting_name": "Office Kit Integration"
+            }
+            brancheEnable = settings[f'settings_{compony_code}'].find_one(
+                _filter)
+            if brancheEnable.get("value"):
+                connect = OnboardingOfficekit()
+                return connect.get_branch(search, offset, limit)
+            else:
+                branches = self.db[f'branch_{compony_code}'].find(
+                    {}, {"_id": 0}).to_list()
+                return branches
         except KeyError:
             return False
 
-    def _get_agents(self, compony_code):
+    def _get_agents(self, compony_code, branch_id):
         try:
-            agents = self.db[f'agents_{compony_code}'].find(
-                {}, {"_id": 0}).to_list()
-            return agents
+            settings = get_database("SettingsDB")
+            _filter = {
+                "setting_name": "Office Kit Integration"
+            }
+            brancheEnable = settings[f'settings_{compony_code}'].find_one(
+                _filter)
+            if brancheEnable.get("value"):
+                from connection.officekit_onboarding import OnboardingOfficekit
+                connect = OnboardingOfficekit()
+                return connect.get_agency(branch_id)
+            else:
+                agents = self.db[f'agents_{compony_code}'].find(
+                    {}, {"_id": 0}).to_list()
+                return agents
         except KeyError:
             return False
 
@@ -124,9 +146,6 @@ class ComponyModel():
                 "agent_name", unique=True)
             data = {
                 "agent_name": agent_name,
-                # "email": email,
-                # "password": password,
-                # "mobile_no": mobile_no,
             }
             self.db[f'agents_{compony_code}'].insert_one(data)
             return True

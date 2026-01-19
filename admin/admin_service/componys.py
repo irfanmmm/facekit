@@ -40,6 +40,7 @@ def update_client_status(compony_code, status):
     companies_dbs = [db_name for db_name in all_dbs if db_name not in exclude]
 
     updated_user = None
+    target_db_name = None
 
     # Find the company DB that contains this company_code
     for db_name in companies_dbs:
@@ -50,6 +51,7 @@ def update_client_status(compony_code, status):
         user_details = collection.find_one({"compony_code": str(compony_code)})
         if user_details:
             # Update status
+            target_db_name = db_name
             collection.update_one(
                 {"compony_code": str(compony_code)},
                 {"$set": {"status": status}},
@@ -63,6 +65,14 @@ def update_client_status(compony_code, status):
     # If not found in any DB
     if not updated_user:
         return {"error": "Company code not found"}
+    
+
+    if status == "rejected" and target_db_name:
+        client.drop_database(target_db_name)
+        return {
+            "status": "rejected",
+            "message": f"Database '{target_db_name}' deleted successfully"
+        }
 
     # Send email
     to_email = updated_user.get("email")

@@ -34,7 +34,8 @@ def now_ist_str():
     return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " IST"
 
 
-app = Flask(__name__, template_folder='public/templates')
+app = Flask(__name__, template_folder='public/templates',
+            static_folder='static', static_url_path='/static')
 app.register_blueprint(admin, url_prefix="/admin")
 app.register_blueprint(auth, url_prefix="/auth")
 app.register_blueprint(attandance, url_prefix="/attandance")
@@ -104,7 +105,8 @@ def after_request(response):
     try:
         response_data = response.get_data(as_text=True)
         ip = request.access_route[0] if request.access_route else request.remote_addr
-        app.logger.info(f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {response_data}")
+        app.logger.info(
+            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {response_data}")
     except Exception:
         response_data = "<unable to read response>"
     return response
@@ -146,31 +148,45 @@ def add_branch():
     return jsonify({"message": "Failed"})
 
 
-@app.route("/get-branch")
+@app.route("/get-branch",  methods=['POST'])
 @jwt_required
 def get_branches():
     user = request.user
     compony_code = user.get('compony_code')
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    offset = data.get("offset")
+    limit = data.get("limit")
+    search = data.get("search")
+
     componyCode = ComponyModel(compony_code)
     branches = componyCode._get_branch(
-        compony_code)
+        compony_code, offset, limit, search)
     if branches:
         return jsonify({"message": "success", "details": branches})
     return jsonify({"message": "Failed"})
 
 
-@app.route("/get-agency")
+@app.route("/get-agency", methods=['POST'])
 @jwt_required
 def get_agencys():
     user = request.user
     compony_code = user.get('compony_code')
+    data = request.get_json()
+    branch_id = data.get('_id')
+
+    if not data or not branch_id:
+        return jsonify({"message": "No JSON body received"}), 400
+
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
     componyCode = ComponyModel(compony_code)
     agencys = componyCode._get_agents(
-        compony_code)
+        compony_code, branch_id)
     if agencys:
         return jsonify({"message": "success", "details": agencys})
     return jsonify({"message": "Failed"})
@@ -201,18 +217,18 @@ def set_branches():
 @jwt_required
 def add_employee_face():
     user = request.user
-
     data = request.get_json()
-
     base64 = data.get('base64')
     fullname = data.get('fullname')
     employeecode = data.get('employeecode')
     compony_code = user.get('compony_code')
+    gender = data.get('gender')
 
     if not data:
         return jsonify({"message": "No JSON body received"}), 400
 
     branch_requerd = False
+    office_kit_user = False
     for settings in user.get("settings", []):
         if settings.get("setting_name") == "Branch Management":
             branch_requerd = settings.get("value", False)
@@ -225,7 +241,10 @@ def add_employee_face():
             if agency_requerd and not agency:
                 return jsonify({"message": "Agency is requerd"})
 
-    if not all([fullname, employeecode, compony_code, base64]):
+        if settings.get("setting_name") == "Office Kit Integration" and settings.get("value"):
+            office_kit_user = True
+
+    if not all([fullname, employeecode, compony_code, base64, gender]):
         return jsonify({"error": "Missing required fields"})
 
     validate = Validate(compony_code, employeecode,
@@ -234,7 +253,7 @@ def add_employee_face():
     if validate_user:
         return jsonify({"message": "User already exists in Face Database"})
     status, message = attendance.update_face(
-        employee_code=employeecode, branch=branch, agency=agency, add_img=base64, company_code=compony_code, fullname=fullname, existing_office_kit_user=user)
+        employee_code=employeecode, branch=branch, agency=agency, add_img=base64, company_code=compony_code, fullname=fullname, gender=gender, existing_office_kit_user=office_kit_user)
     message if message else "somthing went wrong"
     if status:
         return jsonify({"message": message})
@@ -278,7 +297,6 @@ def comare_face():
             return jsonify({"message": "Invalid location"}), 200
 
     base64 = data.get("base64")
-    boundry = data.get("boundry")
 
     if not base64:
         return jsonify({"message": "Missing data"}), 200
@@ -287,6 +305,7 @@ def comare_face():
         company_code=user.get("compony_code"),
         latitude=latitude,
         longitude=longitude,
+        officekit_user=officekit_user
     )
 
     if success:
@@ -415,22 +434,6 @@ def update_face_test():
 
     # Convert BGR → RGB
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    # # ---- FIX MLKIT BOUNDARY ----
-    # h, w, _ = image.shape
-    # pad = int(min(boundary["width"], boundary["height"]) * 0.20)
-
-    # top = max(0, int(boundary["top"] - pad))
-    # left = max(0, int(boundary["left"] - pad))
-    # bottom = min(h, int(boundary["top"] + boundary["height"] + pad))
-    # right = min(w, int(boundary["left"] + boundary["width"] + pad))
-
-    # Validate boundary
-    # if top >= bottom or left >= right:
-    #     return jsonify({"error": "Invalid face boundary"}), 400
-
-    # face_recognition box format
-    # fr_box = [(top, right, bottom, left)]
 
     fr_box = fs.face_locations(rgb)
 
@@ -667,27 +670,6 @@ def home():
 
 if __name__ == "__main__":
     init_faiss_indexes()
-
-    # db = get_database("A941")
-    # collection = db[f'encodings_A941']
-    # pipeline = [
-    #     {
-    #         "$group": {
-    #             "_id": "$employee_code",
-    #             "count": {"$sum": 1},
-    #             "docs": {"$push": "$$ROOT"}
-    #         }
-    #     },
-    #     {
-    #         "$match": {
-    #             "count": {"$gt": 1}  # Only duplicates
-    #         }
-    #     },
-    #     { "$unwind": "$docs" },
-    #     { "$replaceRoot": { "newRoot": "$docs" } }
-    # ]
-
-    # duplicates = list(collection.aggregate(pipeline))
-    # # for doc in duplicates:
-    # print(duplicates, "duplicatesduplicatesduplicates")
+    # from connection.officekit_onboarding import OnboardingOfficekit
+    # OnboardingOfficekit()
     app.run(debug=True, port=5001, host="0.0.0.0")

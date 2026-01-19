@@ -11,7 +11,8 @@ import uuid
 from geopy.distance import geodesic
 from .faiss_manager import FaceIndexManager
 import base64
-
+from connection.officekit_punching import OfficeKitPunching
+from connection.officekit_onboarding import OnboardingOfficekit
 
 WORKING_HOURES = 9
 WORKING_SECONDS = 9 * 60 * 60
@@ -92,7 +93,7 @@ class FaceAttendance:
     def __init__(self):
         pass
 
-    def compare_faces(self, base_img, company_code, latitude, longitude):
+    def compare_faces(self, base_img, company_code, latitude, longitude, officekit_user):
         try:
             try:
                 img_bytes = base64.b64decode(base_img)
@@ -133,20 +134,22 @@ class FaceAttendance:
             branch_name = employee.get("branch")
             db = get_database(company_code)
             if branch_name:
-                branch = db[f'branch_{company_code}'].find_one({
-                    "compony_code": company_code,
-                    "branch_name": branch_name
-                })
+                if officekit_user:
+                    off = OfficeKitPunching()
+                    branch = off.retreve_codinates(branch_name)
+                else:
+                    branch = db[f'branch_{company_code}'].find_one({
+                        "compony_code": company_code,
+                        "branch_name": branch_name
+                    })
                 if branch and all(k in branch for k in ("latitude", "longitude", "radius")):
                     in_radius, dist = is_user_in_radius(
-                        branch["latitude"], branch["longitude"],
-                        latitude, longitude, branch["radius"]
-                    )
+                        branch["latitude"], branch["longitude"], latitude, longitude, branch["radius"])
                     if not in_radius:
                         return False, f"Outside allowed area ({dist:.1f}m away)"
 
             # 8. Log Attendance
-            return self._log_attendance(company_code, employee, best["distance"], db)
+            return self._log_attendance(company_code, employee, best["distance"], db, officekit_user)
 
         except Exception as e:
             print(f"[FaceAttendance] Error: {e}")
@@ -156,7 +159,7 @@ class FaceAttendance:
             traceback.print_exc()
             return False, "System error"
 
-    def update_face(self, employee_code, branch, agency, add_img, company_code, fullname, existing_office_kit_user=None):
+    def update_face(self, employee_code, branch, agency, add_img, company_code, fullname, gender, existing_office_kit_user=False):
         try:
             try:
                 img_bytes = base64.b64decode(add_img)
@@ -214,6 +217,11 @@ class FaceAttendance:
                 "encodings": encoding.tolist(),
                 "_id": result.inserted_id
             })
+
+            if existing_office_kit_user:
+                add_user = OnboardingOfficekit()
+                add_user.add_user(employee_code, branch,
+                                  agency, company_code, fullname, gender)
             return True, "success"
 
         except Exception as e:
@@ -270,7 +278,7 @@ class FaceAttendance:
             logger.info(f"ERROR: {e}")
             return False, "System error while updating user"
 
-    def _log_attendance(self, company_code: str, employee: dict, distance: float, db):
+    def _log_attendance(self, company_code: str, employee: dict, distance: float, db, officekit_user=False):
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow_start = today_start + timedelta(days=1)
@@ -349,6 +357,10 @@ class FaceAttendance:
                 "present": "",
                 "log_details": [log_entry]
             })
+
+        if officekit_user:
+            punching = OfficeKitPunching()
+            punching.punchin_punchout(direction, employee["employee_code"])
 
         return True, {
             "fullname": employee["fullname"],
