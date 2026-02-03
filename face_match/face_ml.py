@@ -99,6 +99,7 @@ def _get_local_branch_cached(company_code, branch_name):
         "branch_name": branch_name
     })
 
+
 class FaceAttendance:
     def __init__(self):
         pass
@@ -148,7 +149,8 @@ class FaceAttendance:
                     off = OfficeKitPunching()
                     branch = off.retreve_codinates(branch_name)
                 else:
-                    branch = _get_local_branch_cached(company_code, branch_name)
+                    branch = _get_local_branch_cached(
+                        company_code, branch_name)
                 if branch and all(k in branch for k in ("latitude", "longitude", "radius")):
                     in_radius, dist = is_user_in_radius(
                         branch["latitude"], branch["longitude"], latitude, longitude, branch["radius"])
@@ -365,9 +367,9 @@ class FaceAttendance:
                 "log_details": [log_entry]
             })
 
-        if officekit_user:
-            punching = OfficeKitPunching()
-            punching.punchin_punchout(direction, employee["employee_code"])
+        # if officekit_user:
+        punching = OfficeKitPunching()
+        punching.punchin_punchout(direction, employee["employee_code"])
 
         return True, {
             "fullname": employee["fullname"],
