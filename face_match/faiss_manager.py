@@ -25,10 +25,10 @@ class FaceIndexManager:
     def rebuild_index(self):
         """Rebuild FAISS index from DB. Runs under lock to avoid race."""
         with self.modify_lock:
-            db = get_database('A337')
-            collection = db[f'encodings_A337']
+            db = get_database(self.company_code)
+            collection = db[f'encodings_{self.company_code}']
             sdb = get_database('SettingsDB')
-            settings = sdb[f'settings_A337']
+            settings = sdb[f'settings_{self.company_code}']
             val = settings.find_one({
                 "setting_name": "Office Kit Integration"
             })
@@ -86,6 +86,7 @@ class FaceIndexManager:
             self.vector_to_doc_id = {
                 i: str(doc["_id"]) for i, doc in enumerate(valid_docs)
             }
+            self.save_to_disk()
 
     def search(self, query_encoding: np.ndarray, k: int = 5, threshold: float = 0.6):
         """
@@ -132,6 +133,7 @@ class FaceIndexManager:
         from main import app
         app.logger.info(
             f"Worker post_fork: initializing FAISS indexes : {new_id}")
+        self.save_to_disk()
 
     def remove_employee(self, mongo_id: str):
         with self.modify_lock:
@@ -139,22 +141,29 @@ class FaceIndexManager:
 
     def save_to_disk(self, path: str = None):
         if path is None:
-            path = f"faiss_index_{self.company_code}.pkl"
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            index_dir = os.path.join(base_dir, "faiss_indexes")
+            os.makedirs(index_dir, exist_ok=True)
+            path = os.path.join(
+                index_dir, f"faiss_index_{self.company_code}.pkl")
 
-        with self.modify_lock:
-            if self.index is None:
-                return
-            data = {
-                "index": faiss.serialize_index(self.index),
-                "employee_map": self.employee_map,
-                "vector_to_doc_id": self.vector_to_doc_id
-            }
-            with open(path, "wb") as f:
-                pickle.dump(data, f)
+        # with self.modify_lock:
+        if self.index is None:
+            return
+        data = {
+            "index": faiss.serialize_index(self.index),
+            "employee_map": self.employee_map,
+            "vector_to_doc_id": self.vector_to_doc_id
+        }
+        with open(path, "wb") as f:
+            pickle.dump(data, f)
 
     def load_from_disk(self, path: str = None):
         if path is None:
-            path = f"faiss_index_{self.company_code}.pkl"
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            index_dir = os.path.join(base_dir, "faiss_indexes")
+            path = os.path.join(
+                index_dir, f"faiss_index_{self.company_code}.pkl")
 
         if not os.path.exists(path):
             return False

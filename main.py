@@ -305,186 +305,13 @@ def comare_face():
         company_code=user.get("compony_code"),
         latitude=latitude,
         longitude=longitude,
-        officekit_user=officekit_user
+        officekit_user=True
     )
 
     if success:
         return jsonify({"message": "success", "details": result}), 200
     else:
         return jsonify({"message": result}), 200
-
-
-@app.route("/compare-face-test", methods=['POST'])
-def campare_face_test():
-    import face_recognition as fs
-
-    data = request.json
-    base64_img = data.get("base64")
-    boundary = data.get("boundry")
-
-    if not base64_img or not boundary:
-        return jsonify({"error": "base64 or boundary missing"}), 400
-
-    # Strip header
-    if "," in base64_img:
-        base64_img = base64_img.split(",")[1]
-
-    # Decode Base64
-    try:
-        img_bytes = base64.b64decode(base64_img)
-    except:
-        return jsonify({"error": "Invalid base64"}), 400
-
-    # Convert to image
-    np_arr = np.frombuffer(img_bytes, np.uint8)
-    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    if image is None:
-        return jsonify({"error": "Invalid image"}), 400
-
-    # RGB
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    # h, w, _ = image.shape
-
-    # # Expand MLKit bounding box (30% recommended)
-    # pad = int(min(boundary["width"], boundary["height"]) * 0.30)
-
-    # top = max(0, boundary["top"] - pad)
-    # left = max(0, boundary["left"] - pad)
-    # bottom = min(h, boundary["top"] + boundary["height"] + pad)
-    # right = min(w, boundary["left"] + boundary["width"] + pad)
-
-    # fr_box = [(top, right, bottom, left)]
-
-    fr_box = fs.face_locations(image_rgb)
-
-    # Generate encoding
-    encodings = fs.face_encodings(image_rgb, fr_box)
-    if not encodings:
-        return jsonify({"error": "Encoding failed"}), 400
-
-    encoding = encodings[0]
-    encoding = encoding / np.linalg.norm(encoding)    # normalize
-
-    compony_code = "A337"
-    db = get_database(compony_code)
-    collection = db[f'encodings_{compony_code}']
-
-    best_match = None
-    best_distance = 999
-
-    for user in collection.find({}, {"_id": 0}):
-        enc = np.array(user["encodings"], dtype=float)
-        enc = enc / np.linalg.norm(enc)   # normalize stored encoding
-
-        # Calculate real face distance
-        dist = np.linalg.norm(enc - encoding)
-
-        if dist < best_distance:
-            best_distance = dist
-            best_match = user
-
-    # Match threshold
-    if best_distance <= 0.40:
-        return jsonify({
-            "message": "success",
-            "details": {"fullname": best_match["fullname"]},
-            "distance": best_distance
-        })
-
-    return jsonify({
-        "message": "face not matching",
-        "distance": best_distance,
-        "message": "face not matching"
-    })
-
-
-@app.route("/update-face-test", methods=["POST"])
-def update_face_test():
-    data = request.json
-    base64_img = data.get("base64")
-    boundary = data.get("boundry")
-    fullname = data.get("fullname")
-    agency = data.get("agency")
-    branch = data.get("branch")
-    employeecode = data.get("employeecode")
-
-    compony_code = "A337"
-    db = get_database(compony_code)
-    collection = db[f"encodings_{compony_code}"]
-
-    # ---- VALIDATE INPUT ----
-    if not base64_img or not boundary:
-        return jsonify({"error": "base64 or boundary missing"}), 400
-
-    # Remove possible header
-    if "," in base64_img:
-        base64_img = base64_img.split(",")[1]
-
-    # Base64 → bytes
-    try:
-        img_bytes = base64.b64decode(base64_img)
-    except:
-        return jsonify({"error": "Invalid base64"}), 400
-
-    # Bytes → numpy image
-    np_arr = np.frombuffer(img_bytes, np.uint8)
-    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    if image is None:
-        return jsonify({"error": "Invalid image"}), 400
-
-    # Convert BGR → RGB
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    fr_box = fs.face_locations(rgb)
-
-    if len(fr_box) > 1:
-        return jsonify({"message": "faild"})
-
-    # ---- GET FACE ENCODING ----
-    encodings = fs.face_encodings(rgb, fr_box)
-
-    if not encodings:
-        return jsonify({"error": "Face not detected properly"}), 400
-
-    encoding = encodings[0].astype(float)
-
-    # Normalize encoding → increases accuracy
-    encoding = encoding / np.linalg.norm(encoding)
-
-    # ---- CHECK IF EMPLOYEE ALREADY EXISTS ----
-    existing = collection.find_one({"employee_code": employeecode})
-
-    if existing:
-        # Append encoding → multiple samples give better matching
-        new_enc_list = existing.get("encodings", encoding.tolist())
-        # new_enc_list.append(encoding.tolist())
-
-        collection.update_one(
-            {"employee_code": employeecode},
-            {
-                "$set": {
-                    "fullname": fullname,
-                    "branch": branch,
-                    "agency": agency,
-                    "encodings": new_enc_list,
-                }
-            }
-        )
-        return jsonify({"message": "Face updated successfully"})
-
-    # ---- INSERT NEW EMPLOYEE ----
-    data = {
-        "company_code": compony_code,
-        "employee_code": employeecode,
-        "fullname": fullname,
-        "branch": branch,
-        "agency": agency,
-        "encodings_list": encoding.tolist()  # store as list
-    }
-
-    collection.insert_one(data)
-
-    return jsonify({"message": "success"})
 
 
 @app.route("/all-employees", methods=['POST'])
@@ -661,6 +488,22 @@ def app_version():
 
     version = collection.find_one({}, {"_id": 0})
     return jsonify({"message": "success", "version": version})
+
+
+
+@app.route("/remove-deuplicate-encodings", methods=['POST'])
+def remove_duplicate_encodings():
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    compony_code = data.get("compony_code")
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    userdetails = UserModel(compony_code)
+    message = userdetails.find_duplicate_faces(compony_code)
+    return jsonify({"message": message})
+
+
 
 
 @app.route('/')

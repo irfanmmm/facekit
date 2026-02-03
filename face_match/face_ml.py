@@ -5,11 +5,13 @@ import numpy as np
 import face_recognition as fr
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any
+from functools import lru_cache
 from model.database import get_database
 from connection.validate_officekit import Validate
 import uuid
 from geopy.distance import geodesic
 from .faiss_manager import FaceIndexManager
+import time
 import base64
 from connection.officekit_punching import OfficeKitPunching
 from connection.officekit_onboarding import OnboardingOfficekit
@@ -89,6 +91,14 @@ def validate_face_image(image):
     return True, face_locations, encodings
 
 
+@lru_cache(maxsize=128)
+def _get_local_branch_cached(company_code, branch_name):
+    db = get_database(company_code)
+    return db[f'branch_{company_code}'].find_one({
+        "compony_code": company_code,
+        "branch_name": branch_name
+    })
+
 class FaceAttendance:
     def __init__(self):
         pass
@@ -138,10 +148,7 @@ class FaceAttendance:
                     off = OfficeKitPunching()
                     branch = off.retreve_codinates(branch_name)
                 else:
-                    branch = db[f'branch_{company_code}'].find_one({
-                        "compony_code": company_code,
-                        "branch_name": branch_name
-                    })
+                    branch = _get_local_branch_cached(company_code, branch_name)
                 if branch and all(k in branch for k in ("latitude", "longitude", "radius")):
                     in_radius, dist = is_user_in_radius(
                         branch["latitude"], branch["longitude"], latitude, longitude, branch["radius"])
@@ -278,7 +285,7 @@ class FaceAttendance:
             logger.info(f"ERROR: {e}")
             return False, "System error while updating user"
 
-    def _log_attendance(self, company_code: str, employee: dict, distance: float, db, officekit_user=False):
+    def _log_attendance(self, company_code: str, employee: dict, distance: float, db, officekit_user=False, async_officekit=False):
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow_start = today_start + timedelta(days=1)

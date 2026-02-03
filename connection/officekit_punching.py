@@ -1,4 +1,5 @@
 from connection.db_officekit import conn
+from functools import lru_cache
 
 
 class OfficeKitPunching:
@@ -17,6 +18,7 @@ class OfficeKitPunching:
         return {
             "branchId":employee_details.get("BranchID")
         }
+    @lru_cache(maxsize=128)
     def retreve_codinates(self, branch):
         query1 = """
         SELECT *

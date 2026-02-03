@@ -35,7 +35,10 @@ def init_faiss_indexes():
 
             try:
                 manager = FaceIndexManager(company_code)
-                manager.rebuild_index()
-                print(f" ✓ Completed FAISS index for {company_code}")
+                if manager.load_from_disk():
+                    print(f" ✓ Loaded FAISS index from disk for {company_code}")
+                else:
+                    manager.rebuild_index()
+                    print(f" ✓ Rebuilt and saved FAISS index for {company_code}")
             except Exception as e:
                 print(f" ❌ Failed to build index for {company_code}: {e}")

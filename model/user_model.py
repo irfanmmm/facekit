@@ -1,7 +1,10 @@
+import os
+from pydoc import doc
 from model.database import get_database
 from datetime import datetime, timedelta
 from face_match.face_ml import FaceAttendance
 from face_match.faiss_manager import FaceIndexManager
+import numpy as np
 # import datetime
 
 # def is_sunday(year):
@@ -226,3 +229,49 @@ class UserModel():
             current = next_month
 
         return {"data": all_results, "total": total_count, "limit": limit, "offset": offset}
+
+    def find_duplicate_faces(self, company_code: str, threshold: float = 0.40):
+        db = self.db
+        collection = db[f'encodings_{company_code}']
+
+        docs = list(collection.find(
+            {},
+            {"_id": 1, "employee_code": 1, "encodings": 1}
+        ))
+
+        cache = FaceIndexManager(company_code)
+        if cache.index is None:
+            cache.rebuild_index()
+
+        seen_pairs = set()
+        duplicates = {}
+
+        for doc in docs:
+            enc_list = doc.get("encodings")
+
+            if not enc_list or len(enc_list) != 128:
+                continue
+            emp_code = doc["employee_code"]
+            enc = np.array(doc["encodings"],
+                       dtype=np.float32).reshape(1, -1)
+
+            results = cache.search(enc,k=10, threshold=0.40)
+
+            for res in results:
+                matched_emp = res["employee"]["employee_code"]
+
+                if matched_emp == emp_code:
+                    continue
+
+                # # 2️⃣ Avoid A↔B double counting
+                # pair = tuple(sorted([emp_code, matched_emp]))
+                # if pair in seen_pairs:
+                #     continue
+                # seen_pairs.add(pair)
+
+                duplicates.setdefault(emp_code, []).append({
+                    "matched_employee": matched_emp,
+                    "distance": res["distance"]
+                })
+
+        return duplicates
