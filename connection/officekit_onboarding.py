@@ -268,16 +268,17 @@ class OnboardingOfficekit:
                 INSERT INTO BIOMETRICS_DTL (
                     CompanyID, 
                     EmployeeID,
+                    DeviceID,
                     UserID,
                     EntryBy,
                     EntryDt
                 )
                 VALUES (    
-                  %s,%s,%s,%s,%s
+                  %s,%s,%s,%s,%s,%s
                 )
             """
             count_cursor.execute(insert_emp_sql7, (
-                1, emp_id, employee_code, 1, now
+                1, emp_id,0, employee_code, 1, now
             ))
 
             self.conn.commit()

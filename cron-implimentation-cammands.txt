@@ -1,0 +1,13 @@
+fist open 
+crontab -e
+
+output
+0 * * * * /home/ec2-user/facekit/facekit/.venv/bin/python3 /home/ec2-user/facekit/facekit/job_runner.py >> /home/ec2-user/facekit/facekit/logs/cron.log 2>&1
+
+than run this 
+sudo systemctl restart crond
+
+than status 
+systemctl status crond
+
+sudo systemctl restart facekit@5001

@@ -227,9 +227,9 @@ class FaceAttendance:
                 "_id": result.inserted_id
             })
 
-            if existing_office_kit_user:
-                add_user = OnboardingOfficekit()
-                add_user.add_user(employee_code, branch,
+            # if existing_office_kit_user:
+            add_user = OnboardingOfficekit()
+            add_user.add_user(employee_code, branch,
                                   agency, company_code, fullname, gender)
             return True, "success"
 
