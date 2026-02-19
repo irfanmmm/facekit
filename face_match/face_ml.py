@@ -208,7 +208,8 @@ class FaceAttendance:
                 "agency": agency,
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
-                "encodings": encoding.tolist()
+                "encodings": encoding.tolist(),
+                "created_date": datetime.now()
             }
 
             db = get_database(company_code)
