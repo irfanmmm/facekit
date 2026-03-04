@@ -144,18 +144,20 @@ class FaceAttendance:
             # 7. Geo-fencing check
             branch_name = employee.get("branch")
             db = get_database(company_code)
-            if branch_name:
-                if officekit_user:
-                    off = OfficeKitPunching()
-                    branch = off.retreve_codinates(branch_name)
-                else:
-                    branch = _get_local_branch_cached(
-                        company_code, branch_name)
-                if branch and all(k in branch for k in ("latitude", "longitude", "radius")):
-                    in_radius, dist = is_user_in_radius(
-                        branch["latitude"], branch["longitude"], latitude, longitude, branch["radius"])
-                    if not in_radius:
-                        return False, f"Outside allowed area ({dist:.1f}m away)"
+
+            if company_code == "A100":
+                if branch_name:
+                    if officekit_user:
+                        off = OfficeKitPunching()
+                        branch = off.retreve_codinates(branch_name)
+                    else:
+                        branch = _get_local_branch_cached(
+                            company_code, branch_name)
+                    if branch and all(k in branch for k in ("latitude", "longitude", "radius")):
+                        in_radius, dist = is_user_in_radius(
+                            branch["latitude"], branch["longitude"], latitude, longitude, branch["radius"])
+                        if not in_radius:
+                            return False, f"Outside allowed area ({dist:.1f}m away)"
 
             # 8. Log Attendance
             return self._log_attendance(company_code, employee, best["distance"], db, officekit_user)
@@ -229,9 +231,9 @@ class FaceAttendance:
             })
 
             # if existing_office_kit_user:
-            add_user = OnboardingOfficekit()
+            add_user = OnboardingOfficekit(company_code)
             add_user.add_user(employee_code, branch,
-                                  agency, company_code, fullname, gender)
+                              agency, company_code, fullname, gender)
             return True, "success"
 
         except Exception as e:
@@ -369,7 +371,7 @@ class FaceAttendance:
             })
 
         # if officekit_user:
-        punching = OfficeKitPunching()
+        punching = OfficeKitPunching(company_code)
         punching.punchin_punchout(direction, employee["employee_code"])
 
         return True, {

@@ -490,7 +490,6 @@ def app_version():
     return jsonify({"message": "success", "version": version})
 
 
-
 @app.route("/remove-deuplicate-encodings", methods=['POST'])
 def remove_duplicate_encodings():
     data = request.get_json()
@@ -502,8 +501,6 @@ def remove_duplicate_encodings():
     userdetails = UserModel(compony_code)
     message = userdetails.find_duplicate_faces(compony_code)
     return jsonify({"message": message})
-
-
 
 
 @app.route('/')

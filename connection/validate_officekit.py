@@ -1,4 +1,4 @@
-from connection.db_officekit import cursor, conn
+from connection.db_officekit import get_db
 from model.database import get_database
 
 
@@ -10,6 +10,8 @@ class Validate():
         self.employee_code = employee_code
         self.user_details = None
         self.isAdmin = isAdmin
+        self.conn = get_db(compony_code)
+        self.cursor = self.conn.cursor()
 
     def validate_employee(self):
         if self.collection.find_one({"compony_code": self.compony_code, "officekit": True}):
@@ -18,12 +20,12 @@ class Validate():
                 FROM HR_EMP_MASTER
                 WHERE emp_code = %s
             """
-            cursor.execute(query, (self.employee_code))
-            result = cursor.fetchone()
+            self.cursor.execute(query, (self.employee_code))
+            result = self.cursor.fetchone()
             if result:
-                columns = [col[0] for col in cursor.description]
+                columns = [col[0] for col in self.cursor.description]
                 row_dict = dict(zip(columns, result))
-                self.user_details  = row_dict
+                self.user_details = row_dict
                 return True, row_dict
             return False, None
         elif self.collection.find_one({"compony_code": self.compony_code, "officekit": False}):
@@ -40,8 +42,8 @@ class Validate():
             VALUES (GETUTCDATE(), %s, GETUTCDATE(), %s)
         """
         user_id = self.user_details['Emp_Code']
-        cursor.execute(query, (user_id, direction))
-        conn.commit()
+        self.cursor.execute(query, (user_id, direction))
+        self.conn.commit()
 
     def log_user(self, direction):
         query = """

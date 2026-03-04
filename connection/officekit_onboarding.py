@@ -3,7 +3,7 @@ from dateutil.relativedelta import relativedelta
 import os
 import base64
 import math
-from connection.db_officekit import conn
+from connection.db_officekit import get_db
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 with open("static/images/photo.png", "rb") as f:
@@ -12,9 +12,8 @@ with open("static/images/photo.png", "rb") as f:
 
 
 class OnboardingOfficekit:
-    def __init__(self):
-
-        self.conn = conn
+    def __init__(self, company_code=None):
+        self.conn = get_db(company_code)
 
     def get_agency(self, branch_id):
         query = """
@@ -278,7 +277,7 @@ class OnboardingOfficekit:
                 )
             """
             count_cursor.execute(insert_emp_sql7, (
-                1, emp_id,0, employee_code, 1, now
+                1, emp_id, 0, employee_code, 1, now
             ))
 
             self.conn.commit()

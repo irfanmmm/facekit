@@ -1,10 +1,11 @@
-from connection.db_officekit import conn
+from connection.db_officekit import get_db
 from functools import lru_cache
 
 
 class OfficeKitPunching:
-    def __init__(self):
-        self.conn = conn
+    def __init__(self, company_code):
+        self.conn = get_db(company_code)
+        self.company_code = company_code
 
     def retrieve_branch_by_user(self, emp_code):
         cursor = self.conn.cursor(as_dict=True)
