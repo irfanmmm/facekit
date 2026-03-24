@@ -89,3 +89,73 @@ def update_client_status(compony_code, status):
     )
 
     return True
+
+
+import base64
+import glob
+
+def fech_client_details(compony_code, limit=10, offset=0):
+    client = get_database(compony_code)  # MongoClient
+    collection = client.get_collection(f"encodings_{compony_code}")
+    
+    total_count = collection.count_documents({})
+    cursor = collection.find({}, {"_id": 0, "encodings": 0, "existing_user_officekit":0,"company_code":0}).skip(offset).limit(limit)
+    
+    emp_details = list(cursor)
+    for emp in emp_details:
+        emp_code = emp.get('employee_code')
+        emp["image"] = None
+        if emp_code:
+            # Search for any file in uploads that contains the employee code
+            matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
+            if matches:
+                try:
+                    with open(matches[0], "rb") as f:
+                        emp["image"] = base64.b64encode(f.read()).decode('utf-8')
+                except Exception:
+                    pass
+
+    return {
+        "data": emp_details,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset
+    }
+
+def fech_client_details_search(compony_code, search, limit=10, offset=0):
+    client = get_database(compony_code)  # MongoClient
+    collection = client.get_collection(f"encodings_{compony_code}")
+    
+    query = {}
+    if search:
+        query = {
+            "$or": [
+                {"employee_code": {"$regex": search, "$options": "i"}},
+                {"fullname": {"$regex": search, "$options": "i"}}
+            ]
+        }
+        
+    total_count = collection.count_documents(query)
+    cursor = collection.find(query, {"_id": 0, "encodings": 0, "existing_user_officekit":0, "company_code":0}).skip(offset).limit(limit)
+    
+    emp_details = list(cursor)
+    for emp in emp_details:
+        emp_code = emp.get('employee_code')
+        emp["image"] = None
+        if emp_code:
+            # Search for any file in uploads that contains the employee code
+            matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
+            if matches:
+                try:
+                    with open(matches[0], "rb") as f:
+                        emp["image"] = base64.b64encode(f.read()).decode('utf-8')
+                except Exception:
+                    pass
+
+    return {
+        "data": emp_details,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+        "search": search
+    }

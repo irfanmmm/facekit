@@ -3,13 +3,13 @@ import logging
 import os
 
 
-workers = 1
-threads = 1
+workers = 3
+threads = 2
 timeout = 300
 keepalive = 30
 graceful_timeout = 60
 bind = "0.0.0.0:5001"
-worker_class = "gthread"  # use gthread if majority is I/O; process workers for CPU-bound
+worker_class = "gthread"  # 3 workers with 2 threads each ensures better concurrency
 preload_app = False       # IMPORTANT: do not preload app if native libs are not fork-safe
 accesslog = "/home/ec2-user/facekit/facekit/logs/access.log"
 errorlog = "/home/ec2-user/facekit/facekit/logs/error.log"

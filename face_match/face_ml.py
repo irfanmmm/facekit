@@ -49,6 +49,14 @@ def validate_face_image(image):
     if h < 320 or w < 320:
         return False, "Image resolution too low. Minimum required is 320x320.", None
 
+    # Resize large images to maximum 800x800 to significantly boost face_recognition speed
+    max_dim = 800
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        h, w = image.shape[:2] # Update dimensions after resize
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray_eq = cv2.equalizeHist(gray)
     blur_score = cv2.Laplacian(gray_eq, cv2.CV_64F).var()
@@ -371,8 +379,16 @@ class FaceAttendance:
             })
 
         # if officekit_user:
-        punching = OfficeKitPunching(company_code)
-        punching.punchin_punchout(direction, employee["employee_code"])
+        import threading
+        def _bg_punch(dir_val, emp_code, comp_code):
+            try:
+                punching = OfficeKitPunching(comp_code)
+                punching.punchin_punchout(dir_val, emp_code)
+            except Exception as e:
+                logger.error(f"Background Punching Error: {e}")
+                
+        t = threading.Thread(target=_bg_punch, args=(direction, employee["employee_code"], company_code))
+        t.start()
 
         return True, {
             "fullname": employee["fullname"],
