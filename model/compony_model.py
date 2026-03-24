@@ -112,7 +112,7 @@ class ComponyModel():
             brancheEnable = settings[f'settings_{compony_code}'].find_one(
                 _filter)
             if brancheEnable.get("value"):
-                connect = OnboardingOfficekit()
+                connect = OnboardingOfficekit(compony_code)
                 return connect.get_branch(search, offset, limit)
             else:
                 branches = self.db[f'branch_{compony_code}'].find(
@@ -131,7 +131,7 @@ class ComponyModel():
                 _filter)
             if brancheEnable.get("value"):
                 from connection.officekit_onboarding import OnboardingOfficekit
-                connect = OnboardingOfficekit()
+                connect = OnboardingOfficekit(compony_code)
                 return connect.get_agency(branch_id)
             else:
                 agents = self.db[f'agents_{compony_code}'].find(

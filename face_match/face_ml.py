@@ -148,7 +148,7 @@ class FaceAttendance:
             if company_code == "A100":
                 if branch_name:
                     if officekit_user:
-                        off = OfficeKitPunching()
+                        off = OfficeKitPunching(company_code)
                         branch = off.retreve_codinates(branch_name)
                     else:
                         branch = _get_local_branch_cached(

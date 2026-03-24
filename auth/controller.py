@@ -28,9 +28,9 @@ def sighnup():
     if not all([compony_name, _name, email, password, mobile_no, emp_count]):
         return jsonify({"error": "Missing required fields"})
 
-    if not client:
-        from model.compony_model import ComponyModel, generate_code
-        client = generate_code()
+    # if not client:
+        # from model.compony_model import ComponyModel, generate_code
+        # client = generate_code()
     componyCode = ComponyModel(client)
     message, company_code = componyCode._set(
         compony_name, _name, email, password, mobile_no, emp_count, client)
