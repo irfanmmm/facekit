@@ -3,7 +3,7 @@ import os
 import time
 import schedule
 import json
-from flask import Flask, render_template, request, jsonify, g
+from flask import Flask, render_template, request, jsonify, g, send_from_directory
 from flask_cors import CORS
 
 from admin.controller import admin
@@ -26,7 +26,8 @@ app = Flask(__name__, template_folder='public/templates',
             static_folder='static', static_url_path='/static')
 
 # Enable CORS specifically for frontend running on port 3000
-CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}})
+CORS(app, resources={
+     r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}})
 
 app.register_blueprint(admin, url_prefix="/admin")
 app.register_blueprint(auth, url_prefix="/auth")
@@ -50,11 +51,12 @@ logging.basicConfig(
 app_logger = app.logger
 app_logger.setLevel(logging.INFO)
 
+
 @app.before_request
 def log_request_body():
     ip = request.access_route[0] if request.access_route else request.remote_addr
     g.start_time = time.time()
-    
+
     content_type = request.headers.get("Content-Type", "").lower()
     if "multipart/form-data" in content_type:
         app.logger.info(
@@ -83,6 +85,7 @@ def log_request_body():
             f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
         )
 
+
 @app.after_request
 def after_request(response):
     try:
@@ -92,13 +95,13 @@ def after_request(response):
         duration = 0
     try:
         ip = request.access_route[0] if request.access_route else request.remote_addr
-        
+
         # Calling get_data() on streams blocks Server-Sent Events from executing
         if response.is_streamed:
             response_data = "<STREAMED_RESPONSE>"
         else:
             response_data = response.get_data(as_text=True)
-            
+
         app.logger.info(
             f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {response_data}")
     except Exception:
@@ -122,9 +125,16 @@ def app_version():
     version = collection.find_one({}, {"_id": 0})
     return jsonify({"message": "success", "version": version})
 
+
 @app.route('/')
 def home():
-    return "Welcome to AttendEase API"
+    return jsonify({"message": "Welcome to AttendEase API", "status": "success"})
+
+
+@app.route('/uploads/<path:filename>')
+def serve_uploads(filename):
+    return send_from_directory('face_match/uploads', filename)
+
 
 if __name__ == "__main__":
     init_faiss_indexes()

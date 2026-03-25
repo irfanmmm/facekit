@@ -93,6 +93,7 @@ def update_client_status(compony_code, status):
 
 import base64
 import glob
+import os
 
 def fech_client_details(compony_code, limit=10, offset=0):
     client = get_database(compony_code)  # MongoClient
@@ -109,11 +110,7 @@ def fech_client_details(compony_code, limit=10, offset=0):
             # Search for any file in uploads that contains the employee code
             matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
             if matches:
-                try:
-                    with open(matches[0], "rb") as f:
-                        emp["image"] = base64.b64encode(f.read()).decode('utf-8')
-                except Exception:
-                    pass
+                emp["image"] = os.path.basename(matches[0])
 
     return {
         "data": emp_details,
@@ -146,11 +143,7 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0):
             # Search for any file in uploads that contains the employee code
             matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
             if matches:
-                try:
-                    with open(matches[0], "rb") as f:
-                        emp["image"] = base64.b64encode(f.read()).decode('utf-8')
-                except Exception:
-                    pass
+                emp["image"] = os.path.basename(matches[0])
 
     return {
         "data": emp_details,
