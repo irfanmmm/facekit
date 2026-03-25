@@ -52,35 +52,53 @@ app_logger = app.logger
 app_logger.setLevel(logging.INFO)
 
 
+def mask_sensitive_data(data):
+    if isinstance(data, dict):
+        masked = {}
+        for key, value in data.items():
+            if key.lower() in ["base64", "image"]:
+                masked[key] = "<REMOVED>"
+            else:
+                masked[key] = mask_sensitive_data(value)
+        return masked
+
+    elif isinstance(data, list):
+        return [mask_sensitive_data(item) for item in data]
+
+    else:
+        return data
+
+
 @app.before_request
 def log_request_body():
     ip = request.access_route[0] if request.access_route else request.remote_addr
     g.start_time = time.time()
 
     content_type = request.headers.get("Content-Type", "").lower()
+
     if "multipart/form-data" in content_type:
         app.logger.info(
             f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: <FORM-DATA SKIPPED>"
         )
         return
 
-    raw_body = request.get_data(as_text=True)
-
     try:
         data = request.get_json(silent=True)
 
-        if isinstance(data, dict) and "base64" in data:
-            masked = data.copy()
-            masked["base64"] = "<BASE64_CONTENT_REMOVED>"
+        if data:
+            masked_data = mask_sensitive_data(data)
+
             app.logger.info(
-                f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {masked}"
+                f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {masked_data}"
             )
         else:
+            raw_body = request.get_data(as_text=True)
             app.logger.info(
                 f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
             )
 
     except Exception:
+        raw_body = request.get_data(as_text=True)
         app.logger.info(
             f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
         )
