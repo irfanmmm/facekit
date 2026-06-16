@@ -11,10 +11,13 @@ class Validate():
         self.user_details = None
         self.isAdmin = isAdmin
         self.conn = get_db(compony_code)
-        self.cursor = self.conn.cursor()
+        self.cursor = self.conn.cursor() if self.conn else None
 
     def validate_employee(self):
         if self.collection.find_one({"compony_code": self.compony_code, "officekit": True}):
+            if not self.cursor:
+                print(f"Validate error: Officekit is enabled for {self.compony_code} but database connection is not available")
+                return False, None
             query = """
                 SELECT *
                 FROM HR_EMP_MASTER
@@ -36,6 +39,9 @@ class Validate():
         return False, None
 
     def insert_log(self, direction):
+        if not self.cursor:
+            print(f"Validate error: Cannot insert log for {self.employee_code}, database connection is not available")
+            return
         query = """
             INSERT INTO ATTENDANCELOG_STAGING
             (DownloadDate, UserId, LogDate, Direction)

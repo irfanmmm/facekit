@@ -13,7 +13,7 @@ class AllEmp:
         sm = Settings(self.company_code)
         enable_create_user = sm.get("Enable Create User")
 
-        where_conditions = []
+        where_conditions = ["SeperationStatus = 0"]
         where_params = []
         
         if enable_create_user:

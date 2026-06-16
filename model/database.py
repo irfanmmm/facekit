@@ -7,7 +7,7 @@ exclude = ["SettingsDB", "admin", "sample_mflix", "local"]
 
 _MONGO_CLIENT = None
 
-def _get_client():
+def _get_client() -> MongoClient:
     """Singleton pattern to get the Mongo Client"""
     global _MONGO_CLIENT
     if _MONGO_CLIENT is None:
@@ -26,10 +26,10 @@ def get_database(db_name=None):
     Cached to avoid repeated dictionary lookups on the client.
     """
     try:
-        client = _get_client()
+        client: MongoClient = _get_client()
         if db_name:
             return client[db_name]
         return client
     except Exception as e:
         print(f"Error in get_database: {e}")
-        return False
+        return None

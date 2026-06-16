@@ -1,5 +1,6 @@
 import logging
 import os
+os.environ['GRPC_ENABLE_FORK_SUPPORT'] = 'true'
 import time
 import schedule
 import json
@@ -12,7 +13,9 @@ from attandance.controller import attandance
 from blueprints.branch_bp import branch_bp
 from blueprints.employee_bp import employee_bp
 from blueprints.attendance_bp import attendance_bp
-
+from admin.evolution_controller import evolution_bp
+from middleware.settings_middleware import inject_settings
+import ipaddress
 from face_match import init_faiss_indexes
 from datetime import datetime, timezone, timedelta
 from model.database import get_database
@@ -27,7 +30,7 @@ app = Flask(__name__, template_folder='public/templates',
 
 # Enable CORS specifically for frontend running on port 3000
 CORS(app, resources={
-     r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000"]}})
+     r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://facekit.officekithr.net"]}})
 
 app.register_blueprint(admin, url_prefix="/admin")
 app.register_blueprint(auth, url_prefix="/auth")
@@ -35,6 +38,7 @@ app.register_blueprint(attandance, url_prefix="/attandance")
 app.register_blueprint(branch_bp, url_prefix="")
 app.register_blueprint(employee_bp, url_prefix="")
 app.register_blueprint(attendance_bp, url_prefix="")
+app.register_blueprint(evolution_bp, url_prefix="/admin/evolution")
 
 log_path = "logs/facekit.log"
 os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -51,6 +55,12 @@ logging.basicConfig(
 app_logger = app.logger
 app_logger.setLevel(logging.INFO)
 
+def is_ip(host):
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
 
 def mask_sensitive_data(data):
     if isinstance(data, dict):
@@ -70,15 +80,20 @@ def mask_sensitive_data(data):
 
 
 @app.before_request
+@inject_settings
 def log_request_body():
     ip = request.access_route[0] if request.access_route else request.remote_addr
     g.start_time = time.time()
+
+    import re
+    host_name = request.headers.get('Host', '').split(':')[0]
+    req_source = "DOMAIN" if not bool(re.match(r'^[\d\.]+$', host_name)) else "IP"
 
     content_type = request.headers.get("Content-Type", "").lower()
 
     if "multipart/form-data" in content_type:
         app.logger.info(
-            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: <FORM-DATA SKIPPED>"
+            f"REQUEST | {request.method} USER_IP | {ip} SOURCE | {req_source} {request.path} | BODY: <FORM-DATA SKIPPED>"
         )
         return
 
@@ -89,18 +104,18 @@ def log_request_body():
             masked_data = mask_sensitive_data(data)
 
             app.logger.info(
-                f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {masked_data}"
+                f"REQUEST | {request.method} USER_IP | {ip} SOURCE | {req_source} {request.path} | BODY: {masked_data}"
             )
         else:
             raw_body = request.get_data(as_text=True)
             app.logger.info(
-                f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
+                f"REQUEST | {request.method} USER_IP | {ip} SOURCE | {req_source} {request.path} | BODY: {raw_body}"
             )
 
     except Exception:
         raw_body = request.get_data(as_text=True)
         app.logger.info(
-            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {raw_body}"
+            f"REQUEST | {request.method} USER_IP | {ip} SOURCE | {req_source} {request.path} | BODY: {raw_body}"
         )
 
 
@@ -114,6 +129,10 @@ def after_request(response):
     try:
         ip = request.access_route[0] if request.access_route else request.remote_addr
 
+        import re
+        host_name = request.headers.get('Host', '').split(':')[0]
+        req_source = "DOMAIN" if not bool(re.match(r'^[\d\.]+$', host_name)) else "IP"
+
         # Calling get_data() on streams blocks Server-Sent Events from executing
         if response.is_streamed:
             response_data = "<STREAMED_RESPONSE>"
@@ -121,7 +140,7 @@ def after_request(response):
             response_data = response.get_data(as_text=True)
 
         app.logger.info(
-            f"REQUEST | {request.method} USER_IP | {ip} {request.path} | BODY: {response_data}")
+            f"REQUEST | {request.method} USER_IP | {ip} SOURCE | {req_source} {request.path} | BODY: {response_data}")
     except Exception:
         pass
     return response

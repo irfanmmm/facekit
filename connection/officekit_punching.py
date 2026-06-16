@@ -8,6 +8,8 @@ class OfficeKitPunching:
         self.company_code = company_code
 
     def retrieve_branch_by_user(self, emp_code):
+        if not self.conn:
+            return {"branchId": None}
         cursor = self.conn.cursor(as_dict=True)
         try:
             query = """
@@ -27,6 +29,8 @@ class OfficeKitPunching:
 
     @lru_cache(maxsize=128)
     def retreve_codinates(self, branch_id):
+        if not self.conn:
+            return None
         cursor = self.conn.cursor(as_dict=True)
         try:
             query1 = """
@@ -64,6 +68,9 @@ class OfficeKitPunching:
         if direction not in ("in", "out"):
             raise ValueError("Invalid punch direction")
 
+        if not self.conn:
+            raise ValueError("Officekit database connection is not available")
+
         cursor = self.conn.cursor(as_dict=True)
 
         query = """
@@ -87,3 +94,42 @@ class OfficeKitPunching:
             print(
                 f"Error during punch {direction} for emp_code {emp_code}: {e}")
             raise e
+
+    def retreve_working_hours(self, emp_code):
+        if not self.conn:
+            return "00:00:00"
+        cursor = self.conn.cursor(as_dict=True)
+        try:
+            query = """
+                SELECT 
+                    MIN(CASE WHEN Direction = 'in' THEN LogDate END) as FirstIn,
+                    MAX(CASE WHEN Direction = 'out' THEN LogDate END) as LastOut
+                FROM ATTENDANCELOG_STAGING
+                WHERE UserId = %s 
+                AND CAST(LogDate AS DATE) = CAST(SYSDATETIMEOFFSET() AT TIME ZONE 'India Standard Time' AS DATE)
+            """
+
+            cursor.execute(query, (emp_code,))
+            result = cursor.fetchone()
+            self.conn.commit()
+            
+            if result and result.get("FirstIn"):
+                from datetime import datetime, timedelta
+                first_in = result["FirstIn"]
+                
+                # Use LastOut if it exists, otherwise use current time (IST)
+                if result.get("LastOut") and result["LastOut"] > first_in:
+                    end_time = result["LastOut"]
+                else:
+                    end_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
+                
+                diff = end_time - first_in
+                total_seconds = max(0, int(diff.total_seconds()))
+                
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                seconds = total_seconds % 60
+                return f"{hours:02}:{minutes:02}:{seconds:02}"
+            return "00:00:00"
+        except Exception:
+            raise

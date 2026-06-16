@@ -2,7 +2,7 @@ fist open
 crontab -e
 
 output
-0 * * * * /home/ec2-user/facekit/facekit/.venv/bin/python3 /home/ec2-user/facekit/facekit/job_runner.py >> /home/ec2-user/facekit/facekit/logs/cron.log 2>&1
+0 * * * * /home/ubuntu/facekit/facekit/.venv/bin/python3 /home/ubuntu/facekit/facekit/job_runner.py >> /home/ubuntu/facekit/facekit/logs/cron.log 2>&1
 
 than run this 
 sudo systemctl restart crond

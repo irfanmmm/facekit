@@ -165,6 +165,32 @@ def edit_user():
     return jsonify({"message": message})
 
 
+@employee_bp.route("/edit-employee-face", methods=['POST'])
+@jwt_required
+def edit_employee_face():
+    user = request.user
+    compony_code = user.get('compony_code')
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+
+    employeecode = data.get("employeecode")
+    base64 = data.get("base64")
+
+    if not all([employeecode, base64]):
+        return jsonify({"message": "employeecode and base64 are required"}), 400
+
+    status, message = attendance.edit_employee_face(
+        employee_code=employeecode,
+        emp_face=base64,
+        compony_code=compony_code,
+    )
+    return jsonify({"message": message, "status": status})
+
+
 @employee_bp.route("/remove-deuplicate-encodings", methods=['POST'])
 def remove_duplicate_encodings():
     data = request.get_json()

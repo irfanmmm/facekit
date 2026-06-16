@@ -75,8 +75,9 @@ def fech_client_details():
     compony_code = data.get("compony_code")
     limit = data.get("limit", 10)
     offset = data.get("offset", 0)
+    date = data.get("date")
     from admin.admin_service.componys import fech_client_details
-    return jsonify({"client_details": fech_client_details(compony_code, limit, offset)})
+    return jsonify({"client_details": fech_client_details(compony_code, limit, offset, date)})
 
 @admin.route('/fech-client-details-search', methods=['POST'])
 @jwt_required
@@ -86,8 +87,119 @@ def fech_client_details_search_route():
     search = data.get("search")
     limit = data.get("limit", 10)
     offset = data.get("offset", 0)
+    date = data.get("date")
     from admin.admin_service.componys import fech_client_details_search
-    return jsonify({"client_details": fech_client_details_search(compony_code, search, limit, offset)})
+    return jsonify({"client_details": fech_client_details_search(compony_code, search, limit, offset, date)})
+
+@admin.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 415
+    from admin.admin_service.componys import create_company
+    response = create_company(data)
+    return jsonify({"response": response})
+
+
+@admin.route('/get-settings', methods=['GET'])
+@jwt_required
+def get_settings_route():
+    compony_code = request.args.get("compony_code")
+    if not compony_code:
+        return jsonify({"message": "compony_code is required"}), 400
+    from admin.admin_service.settings import list_settings
+    return jsonify({"settings": list_settings(compony_code)})
+
+
+@admin.route('/update-settings', methods=['POST'])
+@jwt_required
+def update_settings_route():
+    data = request.get_json()
+    compony_code = data.get("compony_code")
+    setting_name = data.get("setting_name")
+    value = data.get("value")
+    
+    if not all([compony_code, setting_name]) or value is None:
+        return jsonify({"message": "Missing required fields"}), 400
+        
+    from admin.admin_service.settings import update_settings
+    update_settings(compony_code, setting_name, value)
+    return jsonify({"message": "success"})
+
+
+@admin.route('/attendance-list', methods=['GET'])
+@jwt_required
+def attendance_list_route():
+    starting_date = request.args.get("starting_date")
+    ending_date = request.args.get("ending_date")
+    compony_code = request.args.get("compony_code")
+    employee_code = request.args.get("employee_code")
+    
+    if not all([compony_code, employee_code]):
+        return jsonify({"message": "compony_code and employee_code are required"}), 400
+    
+    from admin.admin_service.attendance import get_all_attendance
+    result = get_all_attendance(starting_date, ending_date, compony_code, employee_code)
+    return jsonify({"message": "success", "data": result})
+
+@admin.route('/download/attandance', methods=['GET'])
+@jwt_required
+def download_attendance():
+    starting_date = request.args.get("starting_date")
+    ending_date = request.args.get("ending_date")
+    compony_code = request.args.get("compony_code")
+    
+    if not all([compony_code]):
+        return jsonify({"message": "compony_code required"}), 400
+    
+    from admin.admin_service.download import download_attendance
+    result = download_attendance(starting_date, ending_date, compony_code)
+
+    import pandas as pd
+    from io import BytesIO
+    
+    df = pd.DataFrame(result)
+    
+    csv_buffer = BytesIO()
+    df.to_csv(csv_buffer, index=False)
+    csv_buffer.seek(0)
+    from flask import send_file
+    
+    # Create a response with the CSV data
+    return send_file(
+        csv_buffer,
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=f'attendance_{compony_code}_{starting_date}_to_{ending_date}.csv'
+    )
+    
+
+@admin.route('/download/employee_details', methods=['GET'])
+@jwt_required
+def download_employee_details_route():
+    compony_code = request.args.get("compony_code")
+    branch = request.args.get("branch")
+    employee_id = request.args.get("employee_id")
+    
+    if not all([compony_code]):
+        return jsonify({"message": "compony_code required"}), 400
+    
+    from admin.admin_service.download import download_employee_details
+    pdf_path = download_employee_details(compony_code, branch, employee_id)
+
+    from flask import send_file
+    import os
+    
+    if not pdf_path or not os.path.exists(pdf_path):
+        return jsonify({"message": "No data found or error generating PDF"}), 404
+    
+    return send_file(
+        pdf_path,
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=f'employee_details_{compony_code}.pdf'
+    )
+    
 
 
 

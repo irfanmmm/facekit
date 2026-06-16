@@ -1,0 +1,10 @@
+--- model/client_settings.py
++++ model/client_settings.py.new
+@@ -36,6 +36,7 @@
+                 "allow_multiple_faces": False
+             },
+             "face_threshold": 0.6,
++            "new_feature": True,
+             "created_at": datetime.utcnow(),
+             "updated_at": datetime.utcnow()
+         }

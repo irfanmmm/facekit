@@ -10,12 +10,13 @@ database = os.getenv("OFFICEKIT_DATABASE_NAME")
 username = os.getenv("OFFICEKIT_USERNAME")
 password = os.getenv("OFFICEKIT_PASS")
 port = int(os.getenv("OFFICEKIT_DB_PORT", "1433"))
-host=None
+host = os.getenv("OFFICEKIT_HOST")
+
 
 def get_db(company_code=None):
     # Start with default credentials from .env
-    current_host = None
-    current_server = server
+    current_host = host
+    current_server = os.getenv("OFFICEKIT_SERVER") or server
     current_user = username
     current_pass = password
     current_db = database
@@ -29,16 +30,19 @@ def get_db(company_code=None):
         current_pass = os.getenv("EMPIRE_OFFICEKIT_PASS")
         current_server = os.getenv("EMPIRE_OFFICEKIT_SERVER")
 
-    return pymssql.connect(
-        host=current_host,
-        server=current_server,
-        user=current_user,
-        password=current_pass,
-        database=current_db,
-        port=port,
-        tds_version='7.4'
-    )
+    try:
+        return pymssql.connect(
+            host=current_host,
+            server=current_server,
+            user=current_user,
+            password=current_pass,
+            database=current_db,
+            port=port,
+            login_timeout=5,
+            tds_version='7.4'
+        )
+    except Exception as e:
+        print(f"Database connection failed for company {company_code} on {current_host or current_server}: {e}")
+        return None
 
 
-conn = get_db()
-cursor = conn.cursor()

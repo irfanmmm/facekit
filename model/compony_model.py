@@ -1,5 +1,6 @@
 import random
 from model.database import get_database
+from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 from connection.officekit_onboarding import OnboardingOfficekit
 from utility.jwt_utils import create_token
@@ -15,9 +16,9 @@ def generate_code():
 
 
 class ComponyModel():
-    def __init__(self, compony_code=None):
+    def __init__(self, compony_code=None): 
         self.db = get_database(compony_code)
-        if self.db is None or "compony_details" not in self.db.list_collection_names():
+        if not isinstance(self.db, Database) or "compony_details" not in self.db.list_collection_names():
             self.db = None
             self.collection = None
             self.branchcolloction = None
@@ -29,6 +30,8 @@ class ComponyModel():
 
     def _set(self, compony_name, name, email, password, mobile_no, emp_count, client=None):
         """Store company details"""
+        if client is None:
+            client = generate_code()
         data = {
             "compony_name": compony_name,
             "name": name,
@@ -37,13 +40,13 @@ class ComponyModel():
             "mobile_no": mobile_no,
             "emp_count": emp_count,
             "compony_code": client,
-            "status": "pending",
+        "status": "pending",
             "officekit": (client == "1353")
         }
         try:
             self.db = get_database(client)
             self.collection = self.db["compony_details"]
-            self.collection.create_index("email", unique=True)
+            # self.collection.create_index("email", unique=True)
             self.collection.create_index("compony_code", unique=True)
             self.branchcolloction = self.db['branch_details']
             self.collection.insert_one(data)
@@ -61,7 +64,7 @@ class ComponyModel():
 
     def _verify(self, compony_code):
         """ verify compony code and return token with settings """
-        if self.collection is not None and self.collection.find_one({"compony_code": compony_code, "status": "active"}):
+        if self.collection is not None and self.collection.find_one({"compony_code": compony_code}):
             # Fetch settings using the new centralized Settings utility
             sm = Settings(compony_code)
             settings = sm.get_all()

@@ -14,26 +14,7 @@ auth = Blueprint('auth', __name__)
 
 @auth.route('/signup', methods=['POST'])
 def sighnup():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No JSON body received"}), 400
-
-    compony_name = data.get("compony_name")
-    _name = data.get("name")
-    email = data.get("email")
-    password = data.get("password")
-    mobile_no = data.get("mobile_no")
-    emp_count = data.get("emp_count")
-    client = data.get("client")
-    if not all([compony_name, _name, email, password, mobile_no, emp_count]):
-        return jsonify({"error": "Missing required fields"})
-
-    componyCode = ComponyModel(client)
-    message, company_code = componyCode._set(
-        compony_name, _name, email, password, mobile_no, emp_count, client)
-    if message == "faild":
-        return jsonify({"message": company_code})
-    return jsonify({"message": message})
+    return jsonify({"message": "Registration is currently disabled"}), 403
 
 
 @auth.route("/verify-compony-code", methods=['POST'])

@@ -11,8 +11,8 @@ graceful_timeout = 60
 bind = "0.0.0.0:5001"
 worker_class = "gthread"  # 3 workers with 2 threads each ensures better concurrency
 preload_app = False       # IMPORTANT: do not preload app if native libs are not fork-safe
-accesslog = "/home/ec2-user/facekit/facekit/logs/access.log"
-errorlog = "/home/ec2-user/facekit/facekit/logs/error.log"
+accesslog = "/home/ubuntu/facekit/facekit/logs/access.log"
+errorlog = "/home/ubuntu/facekit/facekit/logs/error.log"
 
 def post_fork(server, worker):
     """Called in the worker process after fork — safe place to init FAISS."""

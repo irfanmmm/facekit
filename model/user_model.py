@@ -138,6 +138,8 @@ class UserModel():
                 return "success"
         return "Somthing went wrong"
 
+    
+
     def edit_attandance_report(self, compony_code, emploee_list_with_action, editad_date):
         """ [{'employee_id':'1','action':'P' | 'PL' | 'UL' | 'H'}] """
 

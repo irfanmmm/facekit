@@ -1,4 +1,5 @@
 from model.database import get_database
+from functools import lru_cache
 
 class Settings:
     """
@@ -55,11 +56,14 @@ class Settings:
             {"$set": {"value": value}},
             upsert=True
         )
-        # Clear cache to force reload
         self._cache = None
+        Settings.get_setting.cache_clear()
         return True
 
     @staticmethod
+    @lru_cache(maxsize=128)
     def get_setting(company_code, name, default=False):
         """Quick static access to a specific setting value"""
         return Settings(company_code).get(name, default)
+
+    

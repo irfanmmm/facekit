@@ -273,14 +273,8 @@ class FaceAttendance:
             if image is None:
                 return False, "Invalid image"
 
-            filename = f"user_{employee_code}.jpg"
-            filepath = os.path.join(uploads_path, filename)
-            cv2.imwrite(filepath, image)
-
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
             ok, message, encodings = validate_face_image(image_rgb)
-
             if not ok:
                 return False, message
 
@@ -288,20 +282,41 @@ class FaceAttendance:
                 return False, "Could not generate face encoding"
 
             current_encoding = encodings[0]
+            cache = FaceIndexManager(compony_code)
+            
+            # Check for duplicates
+            result = cache.search(current_encoding, k=1, threshold=0.40)
+            if (isinstance(result, list) and len(result) > 0 and result[0].get("employee", {}).get("employee_code") == employee_code ):  
+                return False, "This face already exists in the database."
 
+            # Update Database Encodings
             encoding = np.array(current_encoding, dtype=np.float32)
-
             db = get_database(compony_code)
             enc_collection = db[f"encodings_{compony_code}"]
-            # enc_collection.create_index("employee_code", unique=True)
-
             enc_collection.update_one(
                 {"employee_code": employee_code, "company_code": compony_code},
                 {"$set": {"encodings": encoding.tolist()}},
-                upsert=True
             )
-            cache = FaceIndexManager(compony_code)
-            cache.rebuild_index()
+
+            # Background thread for Image Replacement and Index Rebuild
+            import threading
+            def _bg_replace_and_rebuild(emp_code, img, cache_obj):
+                try:
+                    import glob
+                    pattern = os.path.join(uploads_path, f"user_{emp_code}*")
+                    existing_files = glob.glob(pattern)
+                    
+                    if existing_files:
+                        target_path = existing_files[0]
+                    else:
+                        target_path = os.path.join(uploads_path, f"user_{emp_code}.jpg")
+                    
+                    cv2.imwrite(target_path, img)
+                    cache_obj.rebuild_index()
+                except Exception as e:
+                    print(f"Background update error: {e}")
+
+            threading.Thread(target=_bg_replace_and_rebuild, args=(employee_code, image, cache)).start()
 
             return True, "User details updated successfully"
 
@@ -391,6 +406,7 @@ class FaceAttendance:
             })
 
         # if officekit_user:
+        
         import threading
         def _bg_punch(dir_val, emp_code, comp_code):
             try:
@@ -402,10 +418,14 @@ class FaceAttendance:
         t = threading.Thread(target=_bg_punch, args=(direction, employee["employee_code"], company_code))
         t.start()
 
+        working_hours = OfficeKitPunching(company_code)
+        duration = working_hours.retreve_working_hours(employee["employee_code"])
+
         return True, {
             "fullname": employee["fullname"],
             "employee_code": employee["employee_code"],
             "direction": direction,
+            "working_time": duration,
             "confidence_distance": round(distance, 4),
             "message": "Attendance marked successfully"
         }

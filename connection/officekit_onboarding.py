@@ -1,3 +1,5 @@
+import re
+from functools import lru_cache
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import os
@@ -13,9 +15,13 @@ with open("static/images/photo.png", "rb") as f:
 
 class OnboardingOfficekit:
     def __init__(self, company_code=None):
+        self.company_code = company_code
         self.conn = get_db(company_code)
 
+    @lru_cache(maxsize=128)
     def get_agency(self, branch_id):
+        if not self.conn:
+            return []
         query = """
             SELECT LevelFiveId, LevelFiveDescription
             FROM HighLevelViewTable
@@ -34,20 +40,41 @@ class OnboardingOfficekit:
             })
         return mapped_response
 
+    @lru_cache(maxsize=128)
     def get_branch(self, search=None, page=1, limit=10):
         page = max(1, int(page))
         limit = max(1, int(limit))
         offset = (page - 1) * limit
 
+        if not self.conn:
+            return {
+                "data": [],
+                "pagination": {
+                    "totalRecords": 0,
+                    "totalPages": 0,
+                    "currentPage": page,
+                    "limit": limit
+                }
+            }
+
         count_cursor = self.conn.cursor(as_dict=True)
 
         if search:
-            count_query = """
-                SELECT COUNT(DISTINCT LinkID) AS total
-                FROM BranchDetails
-                WHERE Branch LIKE %s
-            """
-            count_cursor.execute(count_query, (f"%{search}%",))
+
+            if type(search) == int or re.match(r'^\d+$', str(search)):
+                count_query = """
+                    SELECT COUNT(DISTINCT LinkID) AS total
+                    FROM BranchDetails
+                    WHERE LinkID = %s
+                """
+                count_cursor.execute(count_query, (search,))
+            else:
+                count_query = """
+                    SELECT COUNT(DISTINCT LinkID) AS total
+                    FROM BranchDetails
+                    WHERE Branch LIKE %s
+                """
+                count_cursor.execute(count_query, (f"%{search}%",))
         else:
             count_query = """
                 SELECT COUNT(DISTINCT LinkID) AS total
@@ -64,8 +91,12 @@ class OnboardingOfficekit:
         data_params = []
 
         if search:
-            data_query += " WHERE Branch LIKE %s"
-            data_params.append(f"%{search}%")
+            if type(search) == int or re.match(r'^\d+$', str(search)):
+                data_query += " WHERE LinkID = %s"
+                data_params.append(search)
+            else:
+                data_query += " WHERE Branch LIKE %s"
+                data_params.append(f"%{search}%")
 
         data_query += """
             GROUP BY LinkID, Branch
@@ -96,6 +127,8 @@ class OnboardingOfficekit:
         }
 
     def add_user(self, employee_code: str, branch, agency, _, fullname, gender):
+        if not self.conn:
+            raise ValueError("Officekit database connection is not available")
         try:
             now = datetime.now()
             join_date = now

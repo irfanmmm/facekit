@@ -74,6 +74,14 @@ class FaceIndexManager:
             }
             self.save_to_disk()
 
+    # def replace(self, mongo_id: str, encoding: np.ndarray):
+    #     with self.modify_lock:
+    #         for i, doc in enumerate(self.employee_map):
+    #             if str(doc["_id"]) == mongo_id:
+    #                 self.employee_map[i]["encodings"] = encoding.tolist()
+    #                 self.index.(i, encoding.astype(np.float32))
+    #                 break
+
     def search(self, query_encoding: np.ndarray, k: int = 5, threshold: float = 0.6):
         """
         Face search — runs without lock.

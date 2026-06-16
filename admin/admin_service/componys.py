@@ -1,6 +1,10 @@
+import re
 from model.database import get_database
+from datetime import datetime, timedelta
 from model.database import exclude
-
+from utility.settings import Settings
+from model.compony_model import ComponyModel
+from connection.officekit_onboarding import OnboardingOfficekit
 
 def list_componys(company_id=None):
     client = get_database()  # this returns a MongoClient instance
@@ -18,7 +22,7 @@ def list_componys(company_id=None):
         # Fetch specific company OR all companies
         if company_id:
             docs = list(collection.find(
-                {"compony_code": company_id}, {"_id": 0}))
+                {"compony_code": str(company_id)}, {"_id": 0}))
         else:
             docs = list(collection.find({}, {"_id": 0}))
 
@@ -95,14 +99,35 @@ import base64
 import glob
 import os
 
-def fech_client_details(compony_code, limit=10, offset=0):
+def fech_client_details(compony_code, limit=10, offset=0, date=None):
     client = get_database(compony_code)  # MongoClient
     collection = client.get_collection(f"encodings_{compony_code}")
     
-    total_count = collection.count_documents({})
-    cursor = collection.find({}, {"_id": 0, "encodings": 0, "existing_user_officekit":0,"company_code":0}).skip(offset).limit(limit)
+    attendance_map = {}
+    if date:
+        try:
+            year_month = date[:7]
+            att_coll_name = f"attandance_{compony_code}_{year_month}"
+            if att_coll_name in client.list_collection_names():
+                att_coll = client[att_coll_name]
+                search_date = datetime.strptime(date, "%Y-%m-%d")
+                att_records = list(att_coll.find({
+                    "date": {"$gte": search_date, "$lt": search_date + timedelta(days=1)}
+                }, {"_id": 0}))
+                attendance_map = {r['employee_id']: r for r in att_records}
+        except Exception as e:
+            print(f"Error fetching attendance: {e}")
+
+    query = {}
+    if date:
+        # If date is provided, we only show employees who were present (have a record)
+        query["employee_code"] = {"$in": list(attendance_map.keys())}
+        
+    total_count = collection.count_documents(query)
+    cursor = collection.find(query, {"_id": 0, "encodings": 0, "existing_user_officekit":0,"company_code":0}).skip(offset).limit(limit)
     
     emp_details = list(cursor)
+    office_kit = OnboardingOfficekit(compony_code)
     for emp in emp_details:
         emp_code = emp.get('employee_code')
         emp["image"] = None
@@ -111,6 +136,22 @@ def fech_client_details(compony_code, limit=10, offset=0):
             matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
             if matches:
                 emp["image"] = os.path.basename(matches[0])
+        
+        # Attach attendance info if date was provided
+        if date:
+            emp["attendance"] = attendance_map.get(emp_code, {})
+        
+        branch = emp.get('branch')
+        if branch and (isinstance(branch, int) or re.match(r'^\d+$', str(branch))):
+            branch_data = office_kit.get_branch(search=branch)
+            if branch_data and branch_data.get('data'):
+                emp['branch'] = branch_data['data'][0]['branch_name']
+
+        agency = emp.get('agency')
+        if agency and (isinstance(agency, int) or re.match(r'^\d+$', str(agency))):
+            agency_data = office_kit.get_agency(agency)
+            if agency_data:
+                emp['agency'] = agency_data[0]['agent_name']
 
     return {
         "data": emp_details,
@@ -119,10 +160,25 @@ def fech_client_details(compony_code, limit=10, offset=0):
         "offset": offset
     }
 
-def fech_client_details_search(compony_code, search, limit=10, offset=0):
+def fech_client_details_search(compony_code, search, limit=10, offset=0, date=None):
     client = get_database(compony_code)  # MongoClient
     collection = client.get_collection(f"encodings_{compony_code}")
     
+    attendance_map = {}
+    if date:
+        try:
+            year_month = date[:7]
+            att_coll_name = f"attandance_{compony_code}_{year_month}"
+            if att_coll_name in client.list_collection_names():
+                att_coll = client[att_coll_name]
+                search_date = datetime.strptime(date, "%Y-%m-%d")
+                att_records = list(att_coll.find({
+                    "date": {"$gte": search_date, "$lt": search_date + timedelta(days=1)}
+                }, {"_id": 0}))
+                attendance_map = {r['employee_id']: r for r in att_records}
+        except Exception as e:
+            print(f"Error fetching attendance in search: {e}")
+
     query = {}
     if search:
         query = {
@@ -131,11 +187,20 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0):
                 {"fullname": {"$regex": search, "$options": "i"}}
             ]
         }
+    
+    if date:
+        # If date is provided, only search within employees who have attendance
+        att_ids = list(attendance_map.keys())
+        if search:
+            query = {"$and": [query, {"employee_code": {"$in": att_ids}}]}
+        else:
+            query["employee_code"] = {"$in": att_ids}
         
     total_count = collection.count_documents(query)
     cursor = collection.find(query, {"_id": 0, "encodings": 0, "existing_user_officekit":0, "company_code":0}).skip(offset).limit(limit)
     
     emp_details = list(cursor)
+    office_kit = OnboardingOfficekit(compony_code)
     for emp in emp_details:
         emp_code = emp.get('employee_code')
         emp["image"] = None
@@ -144,6 +209,16 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0):
             matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
             if matches:
                 emp["image"] = os.path.basename(matches[0])
+        
+        # Attach attendance info if date was provided
+        if date:
+            emp["attendance"] = attendance_map.get(emp_code, {})
+
+        branch = emp.get('branch')
+        if branch and (isinstance(branch, int) or re.match(r'^\d+$', str(branch))):
+            branch_data = office_kit.get_branch(search=branch)
+            if branch_data and branch_data.get('data'):
+                emp['branch'] = branch_data['data'][0]['branch_name']
 
     return {
         "data": emp_details,
@@ -152,3 +227,27 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0):
         "offset": offset,
         "search": search
     }
+
+
+def create_company(data):
+    if not data:
+        return jsonify({"error": "No JSON body received"}), 400
+
+    compony_name = data.get("compony_name")
+    _name = data.get("name")
+    email = data.get("email")
+    password = data.get("password")
+    mobile_no = data.get("mobile_no")
+    emp_count = data.get("emp_count")
+    client = data.get("client")
+    if not all([compony_name, _name, email, password, mobile_no, emp_count]):
+        return jsonify({"error": "Missing required fields"})
+
+    
+    componyCode = ComponyModel(client)
+    message, company_code = componyCode._set(
+        compony_name, _name, email, password, mobile_no, emp_count, client)
+        
+    if message == "faild":
+        return message
+    return message
