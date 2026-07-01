@@ -85,11 +85,15 @@ def fech_client_details_search_route():
     data = request.get_json()
     compony_code = data.get("compony_code")
     search = data.get("search")
+    branch = data.get("branch")
+    agency = data.get("agency")
+    name = data.get("name")
+    employee_code = data.get("employee_code")
     limit = data.get("limit", 10)
     offset = data.get("offset", 0)
     date = data.get("date")
     from admin.admin_service.componys import fech_client_details_search
-    return jsonify({"client_details": fech_client_details_search(compony_code, search, limit, offset, date)})
+    return jsonify({"client_details": fech_client_details_search(compony_code, search, limit, offset, date, branch, agency, name, employee_code)})
 
 @admin.route('/register', methods=['POST'])
 def register():

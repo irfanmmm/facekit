@@ -100,58 +100,179 @@ import glob
 import os
 
 def fech_client_details(compony_code, limit=10, offset=0, date=None):
-    client = get_database(compony_code)  # MongoClient
+    client = get_database(compony_code)
     collection = client.get_collection(f"encodings_{compony_code}")
-    
+
     attendance_map = {}
+
     if date:
         try:
             year_month = date[:7]
             att_coll_name = f"attandance_{compony_code}_{year_month}"
-            if att_coll_name in client.list_collection_names():
-                att_coll = client[att_coll_name]
-                search_date = datetime.strptime(date, "%Y-%m-%d")
-                att_records = list(att_coll.find({
-                    "date": {"$gte": search_date, "$lt": search_date + timedelta(days=1)}
-                }, {"_id": 0}))
-                attendance_map = {r['employee_id']: r for r in att_records}
+
+            att_coll = client[att_coll_name]
+
+            search_date = datetime.strptime(date, "%Y-%m-%d")
+
+            att_records = list(
+                att_coll.find(
+                    {
+                        "date": {
+                            "$gte": search_date,
+                            "$lt": search_date + timedelta(days=1)
+                        }
+                    },
+                    {"_id": 0}
+                )
+            )
+
+            attendance_map = {
+                r["employee_id"]: r
+                for r in att_records
+                if "employee_id" in r
+            }
+
         except Exception as e:
             print(f"Error fetching attendance: {e}")
 
     query = {}
-    if date:
-        # If date is provided, we only show employees who were present (have a record)
-        query["employee_code"] = {"$in": list(attendance_map.keys())}
-        
-    total_count = collection.count_documents(query)
-    cursor = collection.find(query, {"_id": 0, "encodings": 0, "existing_user_officekit":0,"company_code":0}).skip(offset).limit(limit)
-    
-    emp_details = list(cursor)
-    office_kit = OnboardingOfficekit(compony_code)
-    for emp in emp_details:
-        emp_code = emp.get('employee_code')
-        emp["image"] = None
-        if emp_code:
-            # Search for any file in uploads that contains the employee code
-            matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
-            if matches:
-                emp["image"] = os.path.basename(matches[0])
-        
-        # Attach attendance info if date was provided
-        if date:
-            emp["attendance"] = attendance_map.get(emp_code, {})
-        
-        branch = emp.get('branch')
-        if branch and (isinstance(branch, int) or re.match(r'^\d+$', str(branch))):
-            branch_data = office_kit.get_branch(search=branch)
-            if branch_data and branch_data.get('data'):
-                emp['branch'] = branch_data['data'][0]['branch_name']
 
-        agency = emp.get('agency')
-        if agency and (isinstance(agency, int) or re.match(r'^\d+$', str(agency))):
-            agency_data = office_kit.get_agency(agency)
-            if agency_data:
-                emp['agency'] = agency_data[0]['agent_name']
+    if date:
+        query["employee_code"] = {
+            "$in": list(attendance_map.keys())
+        }
+
+    total_count = collection.count_documents(query)
+
+    emp_details = list(
+        collection.find(
+            query,
+            {
+                "_id": 0,
+                "encodings": 0,
+                "existing_user_officekit": 0,
+                "company_code": 0
+            }
+        )
+        .skip(offset)
+        .limit(limit)
+    )
+
+    # ----------------------------------
+    # Load images only once
+    # ----------------------------------
+
+    image_map = {}
+
+    try:
+        upload_dir = "face_match/uploads"
+
+        if os.path.exists(upload_dir):
+            all_files = os.listdir(upload_dir)
+
+            for filename in all_files:
+                full_name = filename.lower()
+
+                for emp in emp_details:
+                    emp_code = str(
+                        emp.get("employee_code", "")
+                    ).lower()
+
+                    if emp_code and emp_code in full_name:
+                        image_map[emp_code] = filename
+
+    except Exception as e:
+        print(f"Image loading error: {e}")
+
+    # ----------------------------------
+    # OfficeKit
+    # ----------------------------------
+
+    office_kit = OnboardingOfficekit(compony_code)
+
+    branch_cache = {}
+    agency_cache = {}
+
+    # ----------------------------------
+    # Employee Processing
+    # ----------------------------------
+
+    for emp in emp_details:
+
+        emp_code = str(
+            emp.get("employee_code", "")
+        ).lower()
+
+        emp["image"] = image_map.get(emp_code)
+
+        if date:
+            emp["attendance"] = attendance_map.get(
+                emp.get("employee_code"),
+                {}
+            )
+
+        branch = emp.get("branch")
+
+        if branch and (
+            isinstance(branch, int)
+            or str(branch).isdigit()
+        ):
+
+            branch_key = str(branch)
+
+            if branch_key not in branch_cache:
+
+                try:
+                    branch_data = office_kit.get_branch(
+                        search=branch
+                    )
+
+                    if (
+                        branch_data
+                        and branch_data.get("data")
+                    ):
+                        branch_cache[branch_key] = (
+                            branch_data["data"][0]["branch_name"]
+                        )
+                    else:
+                        branch_cache[branch_key] = branch
+
+                except Exception:
+                    branch_cache[branch_key] = branch
+
+            emp["branch"] = branch_cache[branch_key]
+
+        # ------------------------------
+        # Agency
+        # ------------------------------
+
+        agency = emp.get("agency")
+
+        if agency and (
+            isinstance(agency, int)
+            or str(agency).isdigit()
+        ):
+
+            agency_key = str(agency)
+
+            if agency_key not in agency_cache:
+
+                try:
+                    agency_data = office_kit.get_agency(
+                        agency
+                    )
+
+                    if agency_data:
+                        agency_cache[agency_key] = (
+                            agency_data[0]["agent_name"]
+                        )
+                    else:
+                        agency_cache[agency_key] = agency
+
+                except Exception:
+                    agency_cache[agency_key] = agency
+
+            emp["agency"] = agency_cache[agency_key]
 
     return {
         "data": emp_details,
@@ -160,7 +281,29 @@ def fech_client_details(compony_code, limit=10, offset=0, date=None):
         "offset": offset
     }
 
-def fech_client_details_search(compony_code, search, limit=10, offset=0, date=None):
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def get_cached_branch_ids(compony_code, search_val):
+    office_kit = OnboardingOfficekit(compony_code)
+    if not office_kit.conn:
+        return None
+    branch_resp = office_kit.get_branch(search=search_val, limit=100)
+    if branch_resp and branch_resp.get("data"):
+        return [b["_id"] for b in branch_resp["data"]]
+    return []
+
+@lru_cache(maxsize=128)
+def get_cached_agency_ids(compony_code, search_val):
+    office_kit = OnboardingOfficekit(compony_code)
+    if not office_kit.conn:
+        return None
+    agency_resp = office_kit.get_agency(search=search_val)
+    if agency_resp:
+        return [a["_id"] for a in agency_resp]
+    return []
+
+def fech_client_details_search(compony_code, search, limit=10, offset=0, date=None, branch=None, agency=None, name=None, employee_code=None):
     client = get_database(compony_code)  # MongoClient
     collection = client.get_collection(f"encodings_{compony_code}")
     
@@ -179,23 +322,52 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
         except Exception as e:
             print(f"Error fetching attendance in search: {e}")
 
-    query = {}
-    if search:
-        query = {
-            "$or": [
-                {"employee_code": {"$regex": search, "$options": "i"}},
-                {"fullname": {"$regex": search, "$options": "i"}}
-            ]
-        }
+    query_parts = []
     
-    if date:
-        # If date is provided, only search within employees who have attendance
-        att_ids = list(attendance_map.keys())
-        if search:
-            query = {"$and": [query, {"employee_code": {"$in": att_ids}}]}
+    
+    office_kit = OnboardingOfficekit(compony_code)
+    
+    if branch:
+        if not (isinstance(branch, int) or re.match(r'^\d+$', str(branch))):
+            branch_ids = get_cached_branch_ids(compony_code, branch)
+            if branch_ids is not None:
+                if branch_ids:
+                    query_parts.append({"branch": {"$in": branch_ids + [str(b) for b in branch_ids]}})
+                else:
+                    query_parts.append({"branch": -1}) # no match
+            else:
+                query_parts.append({"branch": {"$regex": branch, "$options": "i"}})
         else:
-            query["employee_code"] = {"$in": att_ids}
+            query_parts.append({"branch": branch})
+            
+    if agency:
+        if not (isinstance(agency, int) or re.match(r'^\d+$', str(agency))):
+            agency_ids = get_cached_agency_ids(compony_code, agency)
+            if agency_ids is not None:
+                if agency_ids:
+                    query_parts.append({"agency": {"$in": agency_ids + [str(a) for a in agency_ids]}})
+                else:
+                    query_parts.append({"agency": -1}) # no match
+            else:
+                query_parts.append({"agency": {"$regex": agency, "$options": "i"}})
+        else:
+            query_parts.append({"agency": agency})
+    if name:
+        query_parts.append({"fullname": {"$regex": name, "$options": "i"}})
+    if employee_code:
+        query_parts.append({"employee_code": {"$regex": employee_code, "$options": "i"}})
         
+    if date:
+        att_ids = list(attendance_map.keys())
+        query_parts.append({"employee_code": {"$in": att_ids}})
+        
+    query = {}
+    if query_parts:
+        if len(query_parts) == 1:
+            query = query_parts[0]
+        else:
+            query = {"$and": query_parts}
+            
     total_count = collection.count_documents(query)
     cursor = collection.find(query, {"_id": 0, "encodings": 0, "existing_user_officekit":0, "company_code":0}).skip(offset).limit(limit)
     

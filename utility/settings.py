@@ -15,7 +15,8 @@ class Settings:
         "Office Kit Integration": False,
         "List Employees": False,
         "Enable Create User":False,
-        "Office Kit Onboarding": False
+        "Office Kit Onboarding": False,
+        "Branch Wise Login":False
     }
 
     def __init__(self, company_code):

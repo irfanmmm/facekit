@@ -285,9 +285,9 @@ class FaceAttendance:
             cache = FaceIndexManager(compony_code)
             
             # Check for duplicates
-            result = cache.search(current_encoding, k=1, threshold=0.40)
-            if (isinstance(result, list) and len(result) > 0 and result[0].get("employee", {}).get("employee_code") == employee_code ):  
-                return False, "This face already exists in the database."
+            # result = cache.search(current_encoding, k=1, threshold=0.40)
+            # if (isinstance(result, list) and len(result) > 0 and result[0].get("employee", {}).get("employee_code") == employee_code ):  
+            #     return False, "This face already exists in the database."
 
             # Update Database Encodings
             encoding = np.array(current_encoding, dtype=np.float32)

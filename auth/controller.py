@@ -193,9 +193,9 @@ def verify_admin():
         return jsonify({"message": "Missing required fields"})
 
     componyCode = ComponyModel(compony_code)
-    message = componyCode._verify_admin(
+    message, token = componyCode._verify_admin(
         user.get("compony_code"), username, password)
-    return jsonify({"message": message})
+    return jsonify({"message": message, "response":token})
 
 
 """ generate employee code """

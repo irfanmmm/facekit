@@ -73,9 +73,18 @@ class ComponyModel():
 
     def _verify_admin(self, compony_code, username, password):
         """ verify admin """
+        branch_wise_login = Settings.get_setting(compony_code, "Branch Wise Login")
+        if branch_wise_login:
+            validate = self.db['branch_users'].find_one({'branchId': username, 'password':password})
+            if validate:
+                token = create_token({"compony_code": compony_code, "is_admin": True, "settings": Settings(compony_code).get_all(), 'branchId':username})
+                return "success", token
+            else:
+                return "failed", "Invalid credentials"
         if self.collection is not None and self.collection.find_one({"compony_code": compony_code, "email": username, "password": password}):
-            return "success"
-        return "Failed"
+            token = create_token({"compony_code": compony_code, "is_admin": True, "settings": Settings(compony_code).get_all(), 'branchId':None})
+            return "success", token
+        return "failed", "Invalid credentials"
 
     def _branch_set(self, compony_code, branch_name, latitude, longitude, radius):
         try:
@@ -105,6 +114,20 @@ class ComponyModel():
                 return branches
         except (KeyError, AttributeError):
             return False
+    
+    # def _get_branch_byid(self, compony_code, branch_id):
+    #     try:
+    #         # Fully dynamic settings check
+    #         office_kit_enabled = Settings.get_setting(compony_code, "Office Kit Integration")
+    #         if office_kit_enabled:
+    #             connect = OnboardingOfficekit(compony_code)
+    #             return connect.get_branch(branch_id)
+    #         else:
+    #             # Fallback to local branches - using list() instead of to_list() for standard pymongo
+    #             branches = list(self.db[f'branch_{compony_code}'].find({}, {"_id": 0}))
+    #             return branches
+    #     except (KeyError, AttributeError):
+    #         return False
 
     def _get_agents(self, compony_code, branch_id):
         try:

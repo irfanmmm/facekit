@@ -19,18 +19,78 @@ class OnboardingOfficekit:
         self.conn = get_db(company_code)
 
     @lru_cache(maxsize=128)
-    def get_agency(self, branch_id):
+    def get_agency(self, branch_id=None, search=None):
         if not self.conn:
             return []
+        
         query = """
             SELECT LevelFiveId, LevelFiveDescription
             FROM HighLevelViewTable
-            WHERE LevelFourId = %s
+        """
+        conditions = []
+        params = []
+        if branch_id is not None:
+            conditions.append("LevelFourId = %s")
+            params.append(branch_id)
+            
+        if search:
+            if type(search) == int or re.match(r'^\d+$', str(search)):
+                conditions.append("LevelFiveId = %s")
+                params.append(search)
+            else:
+                conditions.append("LevelFiveDescription LIKE %s")
+                params.append(f"%{search}%")
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += """
             GROUP BY LevelFiveId, LevelFiveDescription
             ORDER BY LevelFiveDescription
         """
         count_cursor = self.conn.cursor(as_dict=True)
-        count_cursor.execute(query, (branch_id,))
+        count_cursor.execute(query, tuple(params))
+        rows = count_cursor.fetchall()
+        mapped_response = []
+        for row in rows:
+            mapped_response.append({
+                "_id": row["LevelFiveId"],
+                "agent_name": row["LevelFiveDescription"],
+            })
+        return mapped_response
+    
+    @lru_cache(maxsize=128)
+    def get_agency_byid(self, branch_id=None, search=None):
+        if not self.conn:
+            return []
+        
+        query = """
+            SELECT LevelFiveId, LevelFiveDescription
+            FROM HighLevelViewTable
+        """
+        conditions = []
+        params = []
+        if branch_id is not None:
+            conditions.append("LevelFourId = %s")
+            params.append(branch_id)
+            
+        if search:
+            if type(search) == int or re.match(r'^\d+$', str(search)):
+                conditions.append("LevelFiveId = %s")
+                params.append(search)
+            else:
+                conditions.append("LevelFiveDescription LIKE %s")
+                params.append(f"%{search}%")
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += """
+            GROUP BY LevelFiveId, LevelFiveDescription
+            ORDER BY LevelFiveDescription
+        """
+        count_cursor = self.conn.cursor(as_dict=True)
+        count_cursor.execute(query, tuple(params))
         rows = count_cursor.fetchall()
         mapped_response = []
         for row in rows:
