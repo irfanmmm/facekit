@@ -41,8 +41,23 @@ class AllEmp:
             where_params.extend([search_param, search_param])
             
         if branch_id:
-            where_conditions.append("BranchID = %s")
-            where_params.append(branch_id)
+            if self.company_code == 'A860':
+                sub_q ="""
+                    SELECT LastEntityID FROM HighLevelViewTable WHERE LevelTwoID = %s
+                """
+                cursor = self.conn.cursor(as_dict=True)
+                cursor.execute(sub_q, (branch_id,))
+                rows = cursor.fetchall()
+                last_entyid = [row['LastEntityID'] for row in rows]
+                if last_entyid:
+                    placeholders = ', '.join(['%s'] * len(last_entyid))
+                    where_conditions.append(f"LastEntity IN ({placeholders})")
+                    where_params.extend(last_entyid)
+                else:
+                    where_conditions.append("1=0")
+            else:
+                where_conditions.append("BranchID = %s")
+                where_params.append(branch_id)
             
         where_clause = ""
         if where_conditions:
@@ -52,9 +67,9 @@ class AllEmp:
         cursor = self.conn.cursor(as_dict=True)
         cursor.execute(count_q, tuple(where_params))
         total_count = cursor.fetchone()['total']
-        
+        # First_Name, Last_Name, Emp_Code, Gender, BranchID
         data_q = f"""
-            SELECT First_Name, Last_Name, Emp_Code, Gender, BranchID FROM HR_EMP_MASTER
+            SELECT * FROM HR_EMP_MASTER
             {where_clause}
             ORDER BY Emp_Code
             OFFSET %s ROWS FETCH NEXT %s ROWS ONLY
@@ -85,6 +100,7 @@ class AllEmp:
                 
             data.append({
                 **row,
+                "branch": row.get('BranchID','branch'),
                 "exist": is_exist
             })
 

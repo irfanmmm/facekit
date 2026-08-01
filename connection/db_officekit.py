@@ -29,6 +29,12 @@ def get_db(company_code=None):
         current_user = os.getenv("EMPIRE_OFFICEKIT_USER")
         current_pass = os.getenv("EMPIRE_OFFICEKIT_PASS")
         current_server = os.getenv("EMPIRE_OFFICEKIT_SERVER")
+    if company_code and company_code == 'A860':
+        current_db = os.getenv("ANJUMAN_OFFICEKIT_DATABASE_NAME")
+        current_host = os.getenv("ANJUMAN_OFFICEKIT_IP")
+        current_user = os.getenv("ANJUMAN_OFFICEKIT_USER")
+        current_pass = os.getenv("ANJUMAN_OFFICEKIT_PASS")
+        current_server = os.getenv("ANJUMAN_OFFICEKIT_SERVER")
 
     try:
         return pymssql.connect(

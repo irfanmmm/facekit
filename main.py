@@ -170,9 +170,36 @@ def home():
 
 @app.route('/uploads/<path:filename>')
 def serve_uploads(filename):
-    return send_from_directory('face_match/uploads',filename)
+    try:
+        original_path = os.path.join('face_match/uploads', filename)
+        resized_path = os.path.join('resized_images', filename)
+        
+        if not os.path.exists(original_path):
+            return send_from_directory('face_match/uploads', filename)
+            
+        os.makedirs('resized_images', exist_ok=True)
+        
+        # Create thumbnail if it doesn't exist
+        if not os.path.exists(resized_path):
+            try:
+                from PIL import Image
+                with Image.open(original_path) as img:
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    img.thumbnail((300, 300))
+                    img.save(resized_path, "JPEG", quality=75)
+            except Exception as e:
+                print(f"Error resizing image: {e}")
+                return send_from_directory('face_match/uploads', filename)
+                
+        return send_from_directory('resized_images', filename)
+    except Exception as e:
+        return send_from_directory('face_match/uploads', filename)
 
 
+# def update_admin(db):
+#     print("update admin")
+    
 if __name__ == "__main__":
     init_faiss_indexes()
-    app.run(debug=True, port=5002, host="0.0.0.0")
+    app.run(debug=True, port=5001, host="0.0.0.0")

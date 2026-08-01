@@ -168,18 +168,17 @@ def fech_client_details(compony_code, limit=10, offset=0, date=None):
         upload_dir = "face_match/uploads"
 
         if os.path.exists(upload_dir):
-            all_files = os.listdir(upload_dir)
-
-            for filename in all_files:
+            emp_codes_set = {str(emp.get("employee_code", "")).lower() for emp in emp_details if emp.get("employee_code")}
+            
+            for filename in os.listdir(upload_dir):
                 full_name = filename.lower()
-
-                for emp in emp_details:
-                    emp_code = str(
-                        emp.get("employee_code", "")
-                    ).lower()
-
+                for emp_code in list(emp_codes_set):
                     if emp_code and emp_code in full_name:
                         image_map[emp_code] = filename
+                        emp_codes_set.remove(emp_code)
+                        break
+                if not emp_codes_set:
+                    break
 
     except Exception as e:
         print(f"Image loading error: {e}")
@@ -373,14 +372,30 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
     
     emp_details = list(cursor)
     office_kit = OnboardingOfficekit(compony_code)
+    
+    branch_cache = {}
+    
+    # Pre-fetch images mapping for search results
+    image_map = {}
+    try:
+        upload_dir = "face_match/uploads"
+        if os.path.exists(upload_dir):
+            emp_codes_set = {str(emp.get("employee_code", "")).lower() for emp in emp_details if emp.get("employee_code")}
+            for filename in os.listdir(upload_dir):
+                full_name = filename.lower()
+                for emp_code in list(emp_codes_set):
+                    if emp_code and emp_code in full_name:
+                        image_map[emp_code] = filename
+                        emp_codes_set.remove(emp_code)
+                        break
+                if not emp_codes_set:
+                    break
+    except Exception as e:
+        pass
+        
     for emp in emp_details:
-        emp_code = emp.get('employee_code')
-        emp["image"] = None
-        if emp_code:
-            # Search for any file in uploads that contains the employee code
-            matches = glob.glob(f"face_match/uploads/*{emp_code}*.jpg")
-            if matches:
-                emp["image"] = os.path.basename(matches[0])
+        emp_code = str(emp.get('employee_code', '')).lower()
+        emp["image"] = image_map.get(emp_code)
         
         # Attach attendance info if date was provided
         if date:
@@ -388,9 +403,17 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
 
         branch = emp.get('branch')
         if branch and (isinstance(branch, int) or re.match(r'^\d+$', str(branch))):
-            branch_data = office_kit.get_branch(search=branch)
-            if branch_data and branch_data.get('data'):
-                emp['branch'] = branch_data['data'][0]['branch_name']
+            branch_key = str(branch)
+            if branch_key not in branch_cache:
+                try:
+                    branch_data = office_kit.get_branch(search=branch)
+                    if branch_data and branch_data.get('data'):
+                        branch_cache[branch_key] = branch_data['data'][0]['branch_name']
+                    else:
+                        branch_cache[branch_key] = branch
+                except Exception:
+                    branch_cache[branch_key] = branch
+            emp['branch'] = branch_cache[branch_key]
 
     return {
         "data": emp_details,

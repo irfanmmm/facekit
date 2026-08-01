@@ -19,6 +19,7 @@ class FaceIndexManager:
             instance.employee_map: List[dict] = []
             instance.vector_to_doc_id: Dict[int, str] = {}
             instance.modify_lock = threading.Lock()
+            instance.last_loaded_time = 0
             cls._instances[company_code] = instance
         return cls._instances[company_code]
 
@@ -87,6 +88,18 @@ class FaceIndexManager:
         Face search — runs without lock.
         FAISS read operations are safe in parallel.
         """
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        index_dir = os.path.join(base_dir, "faiss_indexes")
+        path = os.path.join(index_dir, f"faiss_index_{self.company_code}.pkl")
+
+        # Check if the file on disk is newer than our memory cache
+        if os.path.exists(path):
+            current_mtime = os.path.getmtime(path)
+            if current_mtime > self.last_loaded_time:
+                self.load_from_disk(path)
+        elif self.index is None:
+            self.rebuild_index()
+
         if self.index is None or self.index.ntotal == 0:
             return []
 
@@ -95,7 +108,7 @@ class FaceIndexManager:
 
         results = []
         for dist_l2, idx in zip(distances[0], indices[0]):
-            if idx >= len(self.employee_map):
+            if idx < 0 or idx >= len(self.employee_map):
                 continue
 
             distance = np.sqrt(dist_l2)
@@ -170,6 +183,7 @@ class FaceIndexManager:
                 self.index = faiss.deserialize_index(data["index"])
                 self.employee_map = data["employee_map"]
                 self.vector_to_doc_id = data["vector_to_doc_id"]
+                self.last_loaded_time = os.path.getmtime(path)
             return True
         except:
             return False

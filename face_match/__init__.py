@@ -42,3 +42,9 @@ def init_faiss_indexes():
                     print(f" ✓ Rebuilt and saved FAISS index for {company_code}")
             except Exception as e:
                 print(f" ❌ Failed to build index for {company_code}: {e}")
+    
+    # admin_fun(db)
+    #'4681'
+    # print(get_database('A100')['encodings_A100'].update_one({'employee_code':'EMP-5750'}, {"$set": {
+    #     "branch":"4681"
+    # } }))

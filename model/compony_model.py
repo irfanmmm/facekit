@@ -77,9 +77,13 @@ class ComponyModel():
         if branch_wise_login:
             validate = self.db['branch_users'].find_one({'branchId': username, 'password':password})
             if validate:
-                token = create_token({"compony_code": compony_code, "is_admin": True, "settings": Settings(compony_code).get_all(), 'branchId':username})
+                token = create_token({"compony_code": compony_code, "is_admin": False, "settings": Settings(compony_code).get_all(), 'branchId':username})
                 return "success", token
             else:
+                admin_user = self.collection.find_one({"email": username, "password": password})
+                if admin_user:
+                    token = create_token({"compony_code": compony_code, "is_admin": True, "settings": Settings(compony_code).get_all(), 'branchId':None})
+                    return "success", token
                 return "failed", "Invalid credentials"
         if self.collection is not None and self.collection.find_one({"compony_code": compony_code, "email": username, "password": password}):
             token = create_token({"compony_code": compony_code, "is_admin": True, "settings": Settings(compony_code).get_all(), 'branchId':None})
@@ -107,6 +111,8 @@ class ComponyModel():
             office_kit_enabled = Settings.get_setting(compony_code, "Office Kit Integration")
             if office_kit_enabled:
                 connect = OnboardingOfficekit(compony_code)
+                # if compony_code == 'A860':
+                #     return connect.get_branch(search=search, page=offset,limit=limit)
                 return connect.get_branch(search, offset, limit)
             else:
                 # Fallback to local branches - using list() instead of to_list() for standard pymongo

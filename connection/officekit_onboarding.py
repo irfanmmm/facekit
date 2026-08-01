@@ -119,48 +119,56 @@ class OnboardingOfficekit:
 
         count_cursor = self.conn.cursor(as_dict=True)
 
-        if search:
+        if self.company_code == 'A860':
+            id_col = "LevelTwoId"
+            desc_col = "LevelTwoDescription"
+            table_name = "EntityLevelTwo"
+        else:
+            id_col = "LinkID"
+            desc_col = "Branch"
+            table_name = "BranchDetails"
 
+        if search:
             if type(search) == int or re.match(r'^\d+$', str(search)):
-                count_query = """
-                    SELECT COUNT(DISTINCT LinkID) AS total
-                    FROM BranchDetails
-                    WHERE LinkID = %s
+                count_query = f"""
+                    SELECT COUNT(DISTINCT {id_col}) AS total
+                    FROM {table_name}
+                    WHERE {id_col} = %s
                 """
                 count_cursor.execute(count_query, (search,))
             else:
-                count_query = """
-                    SELECT COUNT(DISTINCT LinkID) AS total
-                    FROM BranchDetails
-                    WHERE Branch LIKE %s
+                count_query = f"""
+                    SELECT COUNT(DISTINCT {id_col}) AS total
+                    FROM {table_name}
+                    WHERE {desc_col} LIKE %s
                 """
                 count_cursor.execute(count_query, (f"%{search}%",))
         else:
-            count_query = """
-                SELECT COUNT(DISTINCT LinkID) AS total
-                FROM BranchDetails
+            count_query = f"""
+                SELECT COUNT(DISTINCT {id_col}) AS total
+                FROM {table_name}
             """
             count_cursor.execute(count_query)
 
         total_records = count_cursor.fetchone()["total"]
 
-        data_query = """
-            SELECT LinkID, Branch
-            FROM BranchDetails
+        data_query = f"""
+            SELECT {id_col}, {desc_col}
+            FROM {table_name}
         """
         data_params = []
 
         if search:
             if type(search) == int or re.match(r'^\d+$', str(search)):
-                data_query += " WHERE LinkID = %s"
+                data_query += f" WHERE {id_col} = %s"
                 data_params.append(search)
             else:
-                data_query += " WHERE Branch LIKE %s"
+                data_query += f" WHERE {desc_col} LIKE %s"
                 data_params.append(f"%{search}%")
 
-        data_query += """
-            GROUP BY LinkID, Branch
-            ORDER BY Branch, LinkID
+        data_query += f"""
+            GROUP BY {id_col}, {desc_col}
+            ORDER BY {desc_col}, {id_col}
             OFFSET %s ROWS FETCH NEXT %s ROWS ONLY
         """
         data_params.extend([offset, limit])
@@ -170,8 +178,8 @@ class OnboardingOfficekit:
 
         mapped_response = [
             {
-                "_id": row["LinkID"],
-                "branch_name": row["Branch"],
+                "_id": row[id_col],
+                "branch_name": row[desc_col],
             }
             for row in rows
         ]

@@ -50,8 +50,8 @@ def validate_face_image(image):
     if h < 320 or w < 320:
         return False, "Image resolution too low. Minimum required is 320x320.", None
 
-    # Resize large images to maximum 800x800 to significantly boost face_recognition speed
-    max_dim = 800
+    # Resize large images to maximum 600x600 to significantly boost face_recognition speed
+    max_dim = 600
     if h > max_dim or w > max_dim:
         scale = max_dim / max(h, w)
         new_w, new_h = int(w * scale), int(h * scale)
@@ -79,7 +79,7 @@ def validate_face_image(image):
     if len(face_locations) > 1:
         return False, "Multiple faces detected.", None
 
-    top, right, bottom, left = [x * 2 for x in face_locations[0]]
+    top, right, bottom, left = face_locations[0]
 
     face_w = right - left
     face_h = bottom - top
