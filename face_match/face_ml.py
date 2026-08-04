@@ -58,19 +58,6 @@ def validate_face_image(image):
         image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
         h, w = image.shape[:2] # Update dimensions after resize
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray_eq = cv2.equalizeHist(gray)
-    blur_score = cv2.Laplacian(gray_eq, cv2.CV_64F).var()
-
-    if blur_score < 5:
-        return False, f"Image is blurry (score: {blur_score:.2f}).", None
-
-    brightness = np.mean(gray)
-    if brightness < 20:
-        return False, "Image too dark. Increase lighting.", None
-    if brightness > 250:
-        return False, "Image too bright. Reduce lighting.", None
-
     face_locations = fr.face_locations(image)
 
     if not face_locations:
@@ -84,7 +71,7 @@ def validate_face_image(image):
     face_w = right - left
     face_h = bottom - top
 
-    MIN_FACE_SIZE = 60
+    MIN_FACE_SIZE = 80
 
     if face_w < MIN_FACE_SIZE or face_h < MIN_FACE_SIZE:
         return False, "Face too small. Move closer to the camera.", None
@@ -92,6 +79,33 @@ def validate_face_image(image):
     aspect_ratio = face_w / face_h
     if aspect_ratio < 0.5 or aspect_ratio > 2.0:
         return False, "Face tilted too much. Look straight at camera.", None
+
+    # Reject faces that are cut off at the edges
+    # Increase margin to ensure face is well inside the frame
+    MARGIN = int(max(h, w) * 0.05)  # 5% of the image size
+    if top < MARGIN or bottom > (h - MARGIN) or left < MARGIN or right > (w - MARGIN):
+        return False, "Face is cut off or too close to the edge. Please stand fully in the frame.", None
+
+    # Crop the face for quality checks
+    face_crop = image[top:bottom, left:right]
+    
+    if face_crop.size == 0:
+        return False, "Invalid face crop.", None
+
+    gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+    
+    # Calculate blur only on the raw grayscale face. 
+    # DO NOT use equalizeHist here, it amplifies water drop noise/reflections and tricks the blur detector!
+    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+    if blur_score < 80:  # Increased from 50 to 80 for very strict blur check on raw gray
+        return False, f"Face is blurry (score: {blur_score:.2f}). Please wipe your camera lens.", None
+
+    # Calculate brightness only on the face
+    brightness = np.mean(gray)
+    if brightness < 50:  # Increased from 30 to 50 for stricter dark check
+        return False, f"Face is too dark (score: {brightness:.2f}). Increase lighting.", None
+    if brightness > 220: # Lowered from 230 to 220
+        return False, f"Face is too bright (score: {brightness:.2f}). Reduce lighting.", None
 
     encodings = fr.face_encodings(image, face_locations, num_jitters=1)
     if not encodings:
