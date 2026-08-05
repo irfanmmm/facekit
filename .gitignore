@@ -7,3 +7,6 @@ __pycache__/
 *.env
 reports/
 uploads/
+resized_images/
+*.pkl
+*.bin
