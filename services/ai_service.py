@@ -1,7 +1,11 @@
 import difflib
 import os
-import google.generativeai as genai
 import json
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", category=FutureWarning)
+    import google.generativeai as genai
 
 class AIService:
     """

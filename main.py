@@ -28,9 +28,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app = Flask(__name__, template_folder='public/templates',
             static_folder='static', static_url_path='/static')
 
-# Enable CORS specifically for frontend running on port 3000
-CORS(app, resources={
-     r"/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://facekit.officekithr.net"]}})
+# Enable CORS for mobile apps and web frontend
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 app.register_blueprint(admin, url_prefix="/admin")
 app.register_blueprint(auth, url_prefix="/auth")

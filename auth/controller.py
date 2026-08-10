@@ -81,8 +81,12 @@ def add_user_in_admin():
         return jsonify({"message": "No JSON body received"}), 400
     email = data.get("email")
     employeecode = data.get("employeecode")
-    if not all([email, employeecode]):
+    gender = data.get("gender")
+
+    if not email or not str(email).strip():
         return jsonify({"message": "Missing required fields"})
+
+    emp_code = str(employeecode).strip() if employeecode and str(employeecode).strip() else str(email).strip()
 
     branch_settings = user.get("settings")
     if branch_settings:
@@ -118,9 +122,12 @@ def add_user_in_admin():
 
         doc = {
             "company_code": user.get("compony_code"),
-            "employee_code": employeecode,
+            "employee_code": emp_code,
+            "name": email,
             "email": email
         }
+        if gender:
+            doc["gender"] = gender
 
         # Add conditions safely
         if branch_found:

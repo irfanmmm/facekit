@@ -161,14 +161,16 @@ class ComponyModel():
 
     def _generate_employee_code(self, compony_code):
         """Generate random unique employee code like EMP-1234"""
+        db = self.db if self.db is not None else get_database(compony_code)
         while True:
             emp_code = f"EMP-{random.randint(1000, 9999)}"
-            emp_collection = self.db[f'encodings_{compony_code}']
+            emp_collection = db[f'encodings_{compony_code}']
             if not emp_collection.find_one({"employee_code": emp_code}):
                 return emp_code
     
     def _check_employee_code(self, compony_code, employee_code):
-        emp_collection = self.db[f'encodings_{compony_code}']
+        db = self.db if self.db is not None else get_database(compony_code)
+        emp_collection = db[f'encodings_{compony_code}']
         if emp_collection.find_one({"employee_code": employee_code}):
             return True
         return False

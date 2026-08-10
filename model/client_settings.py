@@ -9,7 +9,10 @@ class ClientSettingsModel:
         self._ensure_indexes()
 
     def _ensure_indexes(self):
-        self.collection.create_index([("client_id", ASCENDING)], unique=True)
+        try:
+            self.collection.create_index([("client_id", ASCENDING)], unique=True)
+        except Exception as e:
+            print(f"Warning: Failed to create index on client_settings: {e}")
 
     def get_settings(self, client_id):
         return self.collection.find_one({"client_id": client_id}, {"_id": 0})

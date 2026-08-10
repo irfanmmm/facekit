@@ -10,6 +10,19 @@ from utility.settings import Settings
 employee_bp = Blueprint('employee', __name__)
 attendance = FaceAttendance()
 
+@employee_bp.route("/model-config", methods=['GET'])
+def get_model_config():
+    """Returns active model embedding dimensions (128d or 192d) and configuration"""
+    return jsonify({
+        "status": "success",
+        "embedding_dim": 128,
+        "model_name": "OpenCV_SFace",
+        "threshold": 0.85,
+        "onboarding_format": "base64",
+        "scanning_format": "client_embedding"
+    }), 200
+
+
 @employee_bp.route("/add-employee-face", methods=['POST'])
 @jwt_required
 def add_employee_face():
@@ -36,8 +49,11 @@ def add_employee_face():
     employeecode = data.get('employeecode')
 
 
-    # Base required fields
-    required_fields = ["fullname", "base64", "gender"]
+    # Base required fields - require images array or single base64 image
+    required_fields = ["fullname", "gender"]
+    if not data.get('images'):
+        required_fields.append("base64")
+
     
     # Dynamic required fields based on settings
     if branch_requerd:
@@ -55,10 +71,26 @@ def add_employee_face():
     # validate = Validate(compony_code, employeecode,
     #                     isAdmin=user.get("is_admin", False))
     # validate_user, user_doc = validate.validate_employee()
-    # if validate_user:
-    #     return jsonify({"message": "User already exists in Face Database"})
+    images = data.get("images")  # list[str] — base64 crops, one per pose
+    if not images:
+        single = data.get("base64")
+        images = [single] if single else None
+
+    client_embeddings = data.get("client_embeddings") or data.get("embeddings")
+
     status, message = attendance.update_face(
-         branch=branch, agency=agency, add_img=base64, company_code=compony_code, fullname=fullname, gender=gender, existing_office_kit_user=office_kit_user, employeecode=employeecode)
+        branch=branch,
+        agency=agency,
+        add_images=images,
+        company_code=compony_code,
+        fullname=fullname,
+        gender=gender,
+        existing_office_kit_user=office_kit_user,
+        employeecode=employeecode,
+        client_embeddings=client_embeddings,
+    )
+
+
     message = message if message else "somthing went wrong"
     if status:
         return jsonify({"message": message})
@@ -96,16 +128,20 @@ def comare_face():
             return jsonify({"message": "Invalid location"}), 200
 
     base64 = data.get("base64")
+    embedding = data.get("client_embedding") or data.get("embedding")
 
-    if not base64:
-        return jsonify({"message": "Missing data"}), 200
+    if not base64 and not embedding:
+        return jsonify({"message": "Image or face embedding required"}), 200
+
     success, result = attendance.compare_faces(
         base_img=base64,
         company_code=user.get("compony_code"),
         latitude=latitude,
         longitude=longitude,
-        officekit_user=True
+        officekit_user=officekit_user,
+        client_embedding=embedding,
     )
+
 
     if success:
         return jsonify({"message": "success", "details": result}), 200
@@ -179,6 +215,7 @@ def edit_employee_face():
 
     employeecode = data.get("employeecode")
     base64 = data.get("base64")
+    embedding = data.get("embedding")
 
     if not all([employeecode, base64]):
         return jsonify({"message": "employeecode and base64 are required"}), 400
@@ -187,6 +224,7 @@ def edit_employee_face():
         employee_code=employeecode,
         emp_face=base64,
         compony_code=compony_code,
+        client_embedding=embedding
     )
     return jsonify({"message": message, "status": status})
 

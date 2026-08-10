@@ -2,7 +2,10 @@ import logging
 import cv2
 import os
 import numpy as np
-import face_recognition as fr
+try:
+    import face_recognition as fr
+except ImportError:
+    fr = None
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any
 from functools import lru_cache
@@ -45,73 +48,172 @@ def save_employee_image(image):
     return
 
 
-def validate_face_image(image):
-    h, w = image.shape[:2]
-    if h < 320 or w < 320:
-        return False, "Image resolution too low. Minimum required is 320x320.", None
+def _quick_sanity_check(image_rgb: np.ndarray):
+    """Cheap check for the client-embedding fast path — NOT a replacement
+    for validate_face_image()'s full dlib-based checks, just enough to catch
+    'no face was actually in this crop' (blank wall, hand over camera,
+    heavily motion-blurred frame, extreme darkness) before it gets stored as
+    someone's permanent face reference.
+    """
+    h, w = image_rgb.shape[:2]
+    if h < 60 or w < 60:
+        return False, "Image too small — please retake"
 
-    # Resize large images to maximum 600x600 to significantly boost face_recognition speed
+    gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+
+    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+    if blur_score < 15:
+        return False, f"Image too blurry (score: {blur_score:.1f}). Please retake."
+
+    brightness = np.mean(gray)
+    if brightness < 20:
+        return False, "Image too dark. Please retake in better lighting."
+    if brightness > 235:
+        return False, "Image too bright/overexposed. Please retake."
+
+    # Very low pixel variance usually means "flat surface, not a face"
+    if np.std(gray) < 10:
+        return False, "No clear face detected in image. Please retake."
+
+    return True, "ok"
+
+
+_SFACE_RECOGNIZER = None
+_YUNET_DETECTOR = None
+
+
+
+def _get_sface_recognizer():
+    global _SFACE_RECOGNIZER
+    if _SFACE_RECOGNIZER is None:
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "face_recognition_sface_2021dec.onnx")
+        if os.path.exists(model_path):
+            try:
+                _SFACE_RECOGNIZER = cv2.FaceRecognizerSF.create(model_path, "")
+                logger.info("Loaded SFace ONNX 128-d model successfully.")
+            except Exception as e:
+                logger.error(f"Failed to load SFace model: {e}")
+    return _SFACE_RECOGNIZER
+
+
+def _get_yunet_detector():
+    global _YUNET_DETECTOR
+    if _YUNET_DETECTOR is None:
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "face_detection_yunet_2023mar.onnx")
+        if os.path.exists(model_path):
+            try:
+                _YUNET_DETECTOR = cv2.FaceDetectorYN.create(model_path, "", (300, 300), score_threshold=0.25, nms_threshold=0.3)
+                logger.info("Loaded YuNet ONNX detector successfully with score_threshold=0.25.")
+            except Exception as e:
+                logger.error(f"Failed to load YuNet detector: {e}")
+    return _YUNET_DETECTOR
+
+
+def validate_face_image(image):
+    """
+    Validates face quality and extracts 128-d SFace embedding vector.
+    Expects BGR image format from OpenCV imdecode/imread.
+    """
+    h, w = image.shape[:2]
+    if h < 64 or w < 64:
+        return False, "Image resolution too low. Minimum required is 64x64.", None
+
+
     max_dim = 600
     if h > max_dim or w > max_dim:
         scale = max_dim / max(h, w)
         new_w, new_h = int(w * scale), int(h * scale)
         image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        h, w = image.shape[:2] # Update dimensions after resize
+        h, w = image.shape[:2]
 
-    face_locations = fr.face_locations(image)
+    detector = _get_yunet_detector()
+    sface = _get_sface_recognizer()
 
-    if not face_locations:
-        return False, "No face detected.", None
+    if detector is not None and sface is not None:
+        detector.setInputSize((w, h))
+        _, faces = detector.detect(image)
 
-    if len(face_locations) > 1:
-        return False, "Multiple faces detected.", None
+        if faces is None or len(faces) == 0:
+            # Auto-rotate fallback for mobile images sent sideways (90° CW, 90° CCW, 180°)
+            for rot_flag in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
+                rot_img = cv2.rotate(image, rot_flag)
+                rh, rw = rot_img.shape[:2]
+                detector.setInputSize((rw, rh))
+                _, rfaces = detector.detect(rot_img)
+                if rfaces is not None and len(rfaces) > 0:
+                    logger.info(f"🔄 Auto-rotated image by rotation flag {rot_flag} to detect face.")
+                    image = rot_img
+                    faces = rfaces
+                    h, w = rh, rw
+                    break
 
-    top, right, bottom, left = face_locations[0]
+        if faces is None or len(faces) == 0:
+            return False, "No clear face detected. Please hold steady facing the camera.", None
 
-    face_w = right - left
-    face_h = bottom - top
+        if len(faces) > 1:
+            return False, "Multiple faces detected.", None
 
-    MIN_FACE_SIZE = 80
+        face_box = faces[0]
+        confidence = float(face_box[14]) if len(face_box) > 14 else 1.0
 
-    if face_w < MIN_FACE_SIZE or face_h < MIN_FACE_SIZE:
-        return False, "Face too small. Move closer to the camera.", None
+        if confidence < 0.20:
+            return False, f"Face feature confidence low ({confidence:.2f}). Please hold steady facing camera.", None
 
-    aspect_ratio = face_w / face_h
-    if aspect_ratio < 0.5 or aspect_ratio > 2.0:
-        return False, "Face tilted too much. Look straight at camera.", None
+        bbox = face_box[:4].astype(int)
+        face_x, face_y, face_w, face_h = max(0, bbox[0]), max(0, bbox[1]), bbox[2], bbox[3]
 
-    # Reject faces that are cut off at the edges
-    # Increase margin to ensure face is well inside the frame
-    MARGIN = int(max(h, w) * 0.05)  # 5% of the image size
-    if top < MARGIN or bottom > (h - MARGIN) or left < MARGIN or right > (w - MARGIN):
-        return False, "Face is cut off or too close to the edge. Please stand fully in the frame.", None
+        if face_w < 40 or face_h < 40:
+            return False, "Face too small. Move closer to the camera.", None
 
-    # Crop the face for quality checks
-    face_crop = image[top:bottom, left:right]
-    
-    if face_crop.size == 0:
-        return False, "Invalid face crop.", None
+        # Quality check on raw un-interpolated face crop (Tenengrad Sobel Gradient Focus Metric)
+        crop_raw = image[face_y:face_y + face_h, face_x:face_x + face_w]
+        if crop_raw.size > 0:
+            gray_crop = cv2.cvtColor(crop_raw, cv2.COLOR_BGR2GRAY)
+            gx = cv2.Sobel(gray_crop, cv2.CV_64F, 1, 0, ksize=3)
+            gy = cv2.Sobel(gray_crop, cv2.CV_64F, 0, 1, ksize=3)
+            tenengrad_score = float(np.mean(gx**2 + gy**2))
 
-    gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
-    
-    # Calculate blur only on the raw grayscale face. 
-    # DO NOT use equalizeHist here, it amplifies water drop noise/reflections and tricks the blur detector!
-    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-    if blur_score < 80:  # Increased from 50 to 80 for very strict blur check on raw gray
-        return False, f"Face is blurry (score: {blur_score:.2f}). Please wipe your camera lens.", None
+            if tenengrad_score < 120:
+                return False, f"Face image is blurry (focus score: {tenengrad_score:.0f}). Please hold steady and wipe lens.", None
 
-    # Calculate brightness only on the face
-    brightness = np.mean(gray)
-    if brightness < 50:  # Increased from 30 to 50 for stricter dark check
-        return False, f"Face is too dark (score: {brightness:.2f}). Increase lighting.", None
-    if brightness > 220: # Lowered from 230 to 220
-        return False, f"Face is too bright (score: {brightness:.2f}). Reduce lighting.", None
+        # Quality check on aligned face
+        aligned_face = sface.alignCrop(image, face_box)
+        gray = cv2.cvtColor(aligned_face, cv2.COLOR_BGR2GRAY)
+        
+        brightness = float(np.mean(gray))
+        if brightness < 15:
+            return False, f"Face is too dark (score: {brightness:.2f}). Increase lighting.", None
+        if brightness > 245:
+            return False, f"Face is too bright (score: {brightness:.2f}). Reduce lighting.", None
 
-    encodings = fr.face_encodings(image, face_locations, num_jitters=1)
-    if not encodings:
-        return False, "Face encoding failed.", None
+        feat = sface.feature(aligned_face)
+        norm = np.linalg.norm(feat)
+        if norm > 0:
+            feat = feat / norm
+        encodings = [feat.flatten()]
 
-    return True, face_locations, encodings
+        # Generate fake face_locations tuple for caller compatibility
+        top, left = max(0, bbox[1]), max(0, bbox[0])
+        bottom, right = min(h, top + face_h), min(w, left + face_w)
+        face_locations = [(top, right, bottom, left)]
+
+        return True, face_locations, encodings
+
+    elif fr is not None:
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        face_locations = fr.face_locations(image_rgb)
+        if not face_locations:
+            return False, "No face detected.", None
+        if len(face_locations) > 1:
+            return False, "Multiple faces detected.", None
+
+        encodings = fr.face_encodings(image_rgb, face_locations, num_jitters=1)
+        if not encodings:
+            return False, "Face encoding failed.", None
+
+        return True, face_locations, encodings
+    else:
+        return False, "No face recognition model available.", None
 
 
 @lru_cache(maxsize=128)
@@ -127,36 +229,81 @@ class FaceAttendance:
     def __init__(self):
         pass
 
-    def compare_faces(self, base_img, company_code, latitude, longitude, officekit_user):
+    def compare_faces(self, base_img=None, company_code=None, latitude=0, longitude=0, officekit_user=False, client_embedding=None):
         try:
-            try:
-                img_bytes = base64.b64decode(base_img)
-            except:
-                return False, "invalid image"
+            current_encoding = None
 
-            np_arr = np.frombuffer(img_bytes, np.uint8)
-            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            if image is None:
-                return "Invalid image"
+            # 1. Primary: Server-side OpenCV SFace 128-d model with 5-point landmark affine alignment
+            if base_img:
+                try:
+                    img_bytes = base64.b64decode(base_img)
+                    np_arr = np.frombuffer(img_bytes, np.uint8)
+                    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                except Exception:
+                    image = None
 
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                if image is not None:
+                    # DEBUG: Uncomment lines below to save debug scan images to disk if needed
+                    # try:
+                    #     debug_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'scanned_faces')
+                    #     os.makedirs(debug_dir, exist_ok=True)
+                    #     ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+                    #     save_path = os.path.join(debug_dir, f"scan_{ts}.jpg")
+                    #     cv2.imwrite(save_path, image)
+                    #     file_size_kb = os.path.getsize(save_path) / 1024.0
+                    #     logger.info(f"📸 Saved debug scan image: {save_path} ({file_size_kb:.2f} KB)")
+                    # except Exception as save_err:
+                    #     print(f"Debug save error: {save_err}")
 
-            ok, message, encodings = validate_face_image(image_rgb)
+                    ok, message, encodings = validate_face_image(image)
+                    if ok and encodings:
+                        current_encoding = encodings[0]
+                    else:
+                        return False, message
 
-            if not ok:
-                return False, message
 
-            current_encoding = encodings[0]
 
-            MAX_ALLOWED_DISTANCE = 0.40
+            # 2. Fallback: Client embedding payload if base_img is omitted
+            if current_encoding is None and client_embedding is not None and isinstance(client_embedding, list):
+                if len(client_embedding) >= 128:
+                    arr = np.array(client_embedding[:128], dtype=np.float32)
+                    n = np.linalg.norm(arr)
+                    if n > 0:
+                        current_encoding = arr / n
+
+            if current_encoding is None:
+                return False, "Could not detect or extract face from camera image"
+
+            # OpenCV SFace L2 Distance Match Threshold (0.85 for robust mobile matching under lighting/angle variations)
+            MAX_ALLOWED_DISTANCE = 0.85
             manager = FaceIndexManager(company_code)
             candidates = manager.search(
-                current_encoding, k=10, threshold=MAX_ALLOWED_DISTANCE)
+                current_encoding, k=10, threshold=MAX_ALLOWED_DISTANCE
+            )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
             if not candidates:
                 return False, "No matching face found"
 
-            # 6. Get best match
+            # Get best match
             best = min(candidates, key=lambda x: x["distance"])
 
             if best["distance"] > MAX_ALLOWED_DISTANCE:
@@ -164,7 +311,7 @@ class FaceAttendance:
 
             employee = best["employee"]
 
-            # 7. Geo-fencing check
+            # Geo-fencing check
             branch_name = employee.get("branch")
             db = get_database(company_code)
 
@@ -182,60 +329,105 @@ class FaceAttendance:
                         if not in_radius:
                             return False, f"Outside allowed area ({dist:.1f}m away)"
 
-            # 8. Log Attendance
+            # Log Attendance
             return self._log_attendance(company_code, employee, best["distance"], db, officekit_user)
 
         except Exception as e:
             print(f"[FaceAttendance] Error: {e}")
-
             logger.info(f"ERROR: {e}")
             import traceback
             traceback.print_exc()
             return False, "System error"
 
-    def update_face(self, branch, agency, add_img, company_code, fullname, gender, existing_office_kit_user=False, employeecode=None):
+    def update_face(self, branch, agency, add_images=None, company_code=None, fullname=None, gender=None, existing_office_kit_user=False, employeecode=None, add_img=None, client_embeddings=None, client_embedding=None):
         try:
-            try:
-                img_bytes = base64.b64decode(add_img)
-            except:
-                return False, "invalid image"
-            np_arr = np.frombuffer(img_bytes, np.uint8)
-            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            if image is None:
-                return "Invalid image"
+            current_encodings = []
+            primary_image = None
 
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # 1. Primary: Process Base64 images through server-side OpenCV SFace 128-d model
+            images_input = add_images
+            if not images_input and add_img:
+                images_input = [add_img]
 
-            # generate new employee code
+            if images_input and isinstance(images_input, list):
+                for idx, img_b64 in enumerate(images_input):
+                    if not img_b64:
+                        continue
+                    try:
+                        img_bytes = base64.b64decode(img_b64)
+                        np_arr = np.frombuffer(img_bytes, np.uint8)
+                        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    except Exception:
+                        image = None
+
+                    if image is None:
+                        return False, f"Pose {idx + 1}: Invalid image data"
+
+                    ok, message, encodings = validate_face_image(image)
+                    if not ok or not encodings:
+                        return False, f"Pose {idx + 1}: {message}"
+
+                    enc_list = encodings[0].tolist() if hasattr(encodings[0], "tolist") else list(encodings[0])
+                    current_encodings.append(enc_list)
+                    if primary_image is None:
+                        primary_image = image
+
+            # 2. Fallback: On-device client_embeddings vector payloads
+            if not current_encodings:
+                if client_embeddings and isinstance(client_embeddings, list):
+                    for emb in client_embeddings:
+                        if isinstance(emb, list) and len(emb) == 128:
+                            arr = np.array(emb, dtype=np.float32)
+                            n = np.linalg.norm(arr)
+                            if n > 0:
+                                current_encodings.append((arr / n).tolist())
+
+
+
+            if not current_encodings:
+                return False, "No valid face encodings generated"
+
+
+
+
+            # Generate / validate employee code
             compony = ComponyModel(compony_code=company_code)
             if not employeecode:
                 employee_code = compony._generate_employee_code(company_code)
             else:
-                # check existing employee code
                 employee_code = employeecode.strip() if employeecode else employeecode
                 if compony._check_employee_code(company_code, employee_code):
                     return False, "This employee already exists"
-            filename = f"user_{employee_code}_{branch}_{agency}_{fullname}_{company_code}.jpg"
-            filepath = os.path.join(uploads_path, filename)
-            cv2.imwrite(filepath, image)
 
-            ok, message, encodings = validate_face_image(image_rgb)
+            # Save primary photo to disk
+            if primary_image is not None:
+                filename = f"user_{employee_code}_{branch}_{agency}_{fullname}_{company_code}.jpg"
+                filepath = os.path.join(uploads_path, filename)
+                cv2.imwrite(filepath, primary_image)
 
-            if not ok:
-                return False, message
-
-            current_encoding = encodings[0]
-
-            MAX_ALLOWED_DISTANCE = 0.40
+            # Duplicate check against every pose (SFace 128-d space)
+            DUPLICATE_CHECK_THRESHOLD = 0.85
             cashe = FaceIndexManager(company_code)
-            candidates = cashe.search(
-                current_encoding, k=10, threshold=MAX_ALLOWED_DISTANCE)
 
-            if candidates:
-                return False, "This face already exists in the database."
 
-            encoding = np.array(current_encoding, dtype=np.float32)
 
+            for pose_vec in current_encodings:
+                search_enc = np.array(pose_vec, dtype=np.float32)
+                candidates = cashe.search(search_enc, k=10, threshold=DUPLICATE_CHECK_THRESHOLD)
+                if candidates:
+                    matched_emp_code = candidates[0]["employee"].get("employee_code", "")
+                    if matched_emp_code and matched_emp_code == employee_code:
+                        continue
+
+                    matched_emp = candidates[0]["employee"].get("fullname", "Unknown")
+                    matched_dist = candidates[0]["distance"]
+                    msg = f"This face is already registered to employee '{matched_emp}' ({matched_emp_code})."
+                    print(f"⚠️ Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
+                    logger.info(f"Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
+                    return False, msg
+
+
+            # Store all pose encodings in MongoDB
             data = {
                 "company_code": company_code,
                 "employee_code": employee_code,
@@ -243,98 +435,128 @@ class FaceAttendance:
                 "agency": agency,
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
-                "encodings": encoding.tolist(),
+                "encodings": current_encodings,  # list of 128-d dlib vectors
                 "created_date": datetime.now()
             }
 
             db = get_database(company_code)
             collection = db[f"encodings_{company_code}"]
-
             result = collection.insert_one(data)
 
             cashe.add_employee({
+                "_id": result.inserted_id,
+                "encodings": current_encodings,
                 "company_code": company_code,
                 "employee_code": employee_code,
                 "branch": branch,
                 "agency": agency,
                 "fullname": fullname,
-                "existing_user_officekit": existing_office_kit_user,
-                "encodings": encoding.tolist(),
-                "_id": result.inserted_id
+                "existing_user_officekit": existing_office_kit_user
             })
 
             if Settings.get_setting(company_code, "Office Kit Onboarding"):
-                add_user = OnboardingOfficekit(company_code)
-                add_user.add_user(employee_code, branch,
-                            agency, company_code, fullname, gender)
+                import threading
+                def _bg_onboard():
+                    try:
+                        add_user = OnboardingOfficekit(company_code)
+                        add_user.add_user(employee_code, branch, agency, company_code, fullname, gender)
+                    except Exception as ex:
+                        logger.error(f"OfficeKit Onboarding error: {ex}")
+                threading.Thread(target=_bg_onboard).start()
+
             return True, "success"
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"Error in update_face: {e}")
             logger.info(f"ERROR: {e}")
             return False, "System error during face update"
 
-    def edit_employee_face(self, employee_code, emp_face, compony_code, existing_officekit_user=None):
-        employee_code = employee_code.strip() if employee_code else employee_code
-        try:
-            try:
-                img_bytes = base64.b64decode(emp_face)
-            except:
-                return False, "invalid image"
 
+    def add_employee_pose(self, employee_code, company_code, add_img):
+        """Append an additional pose to an existing employee using server-side dlib."""
+        try:
+            if not add_img:
+                return False, "Image required"
+            img_bytes = base64.b64decode(add_img)
             np_arr = np.frombuffer(img_bytes, np.uint8)
             image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if image is None:
-                return False, "Invalid image"
+                return False, "Invalid image format"
 
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             ok, message, encodings = validate_face_image(image_rgb)
-            if not ok:
-                return False, message
+            if not ok or not encodings:
+                return False, message if message else "Face not detected"
 
-            if not encodings:
-                return False, "Could not generate face encoding"
+            new_vec = encodings[0].tolist()
 
-            current_encoding = encodings[0]
-            cache = FaceIndexManager(compony_code)
-            
-            # Check for duplicates
-            # result = cache.search(current_encoding, k=1, threshold=0.40)
-            # if (isinstance(result, list) and len(result) > 0 and result[0].get("employee", {}).get("employee_code") == employee_code ):  
-            #     return False, "This face already exists in the database."
+            db = get_database(company_code)
+            collection = db[f"encodings_{company_code}"]
 
-            # Update Database Encodings
-            encoding = np.array(current_encoding, dtype=np.float32)
-            db = get_database(compony_code)
-            enc_collection = db[f"encodings_{compony_code}"]
-            enc_collection.update_one(
-                {"employee_code": employee_code, "company_code": compony_code},
-                {"$set": {"encodings": encoding.tolist()}},
+            doc = collection.find_one({"employee_code": employee_code, "company_code": company_code})
+            if not doc:
+                return False, "Employee not found"
+
+            existing = doc.get("encodings", [])
+            if existing and not isinstance(existing[0], list):
+                existing = [existing]
+
+            if len(existing) >= 4:
+                return False, "Maximum poses already stored for this employee"
+
+            collection.update_one(
+                {"employee_code": employee_code, "company_code": company_code},
+                {"$push": {"encodings": new_vec}}
             )
 
-            # Background thread for Image Replacement and Index Rebuild
-            import threading
-            def _bg_replace_and_rebuild(emp_code, img, cache_obj):
-                try:
-                    import glob
-                    pattern = os.path.join(uploads_path, f"user_{emp_code}*")
-                    existing_files = glob.glob(pattern)
-                    
-                    if existing_files:
-                        target_path = existing_files[0]
-                    else:
-                        target_path = os.path.join(uploads_path, f"user_{emp_code}.jpg")
-                    
-                    cv2.imwrite(target_path, img)
-                    cache_obj.rebuild_index()
-                except Exception as e:
-                    print(f"Background update error: {e}")
-
-            threading.Thread(target=_bg_replace_and_rebuild, args=(employee_code, image, cache)).start()
-
-            return True, "User details updated successfully"
+            FaceIndexManager(company_code).rebuild_index()
+            return True, "Pose added successfully"
 
         except Exception as e:
+            logger.error(f"add_employee_pose error: {e}")
+            return False, "System error adding pose"
+
+    def edit_employee_face(self, employee_code, emp_face, compony_code, existing_officekit_user=None, client_embedding=None):
+        employee_code = employee_code.strip() if employee_code else employee_code
+        try:
+            if not emp_face:
+                return False, "Image required"
+
+            try:
+                img_bytes = base64.b64decode(emp_face)
+                np_arr = np.frombuffer(img_bytes, np.uint8)
+                image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            except Exception:
+                return False, "Invalid image data"
+
+            if image is None:
+                return False, "Invalid image format"
+
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            ok, message, encodings = validate_face_image(image_rgb)
+            if not ok or not encodings:
+                return False, message if message else "Could not detect face"
+
+            current_encoding = [encodings[0].tolist()]
+
+            db = get_database(compony_code)
+            enc_collection = db[f"encodings_{compony_code}"]
+
+            enc_collection.update_one(
+                {"employee_code": employee_code, "company_code": compony_code},
+                {"$set": {"encodings": current_encoding}},
+            )
+
+            cache = FaceIndexManager(compony_code)
+            cache.rebuild_index()
+            return True, "Face updated successfully"
+
+        except Exception as e:
+            print(f"Error in edit_employee_face: {e}")
+            return False, "System error during face edit"
+
             print(f"Error in edit_user_details: {e}")
             logger.info(f"ERROR: {e}")
             return False, "System error while updating user"
@@ -421,19 +643,19 @@ class FaceAttendance:
 
         # if officekit_user:
         
-        import threading
-        def _bg_punch(dir_val, emp_code, comp_code):
-            try:
-                punching = OfficeKitPunching(comp_code)
-                punching.punchin_punchout(dir_val, emp_code)
-            except Exception as e:
-                logger.error(f"Background Punching Error: {e}")
-                
-        t = threading.Thread(target=_bg_punch, args=(direction, employee["employee_code"], company_code))
-        t.start()
+        duration = "00:00:00"
+        if officekit_user:
+            import threading
+            def _bg_punch(dir_val, emp_code, comp_code):
+                try:
+                    punching = OfficeKitPunching(comp_code)
+                    punching.punchin_punchout(dir_val, emp_code)
+                except Exception as e:
+                    logger.error(f"Background Punching Error: {e}")
 
-        working_hours = OfficeKitPunching(company_code)
-        duration = working_hours.retreve_working_hours(employee["employee_code"])
+            t = threading.Thread(target=_bg_punch, args=(direction, employee["employee_code"], company_code), daemon=True)
+            t.start()
+
 
         return True, {
             "fullname": employee["fullname"],

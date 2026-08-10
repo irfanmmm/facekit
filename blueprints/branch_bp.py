@@ -49,7 +49,7 @@ def get_branches():
     componyCode = ComponyModel(compony_code)
     branches = componyCode._get_branch(
         compony_code, offset, limit, search)
-    if branches:
+    if isinstance(branches, list):
         return jsonify({"message": "success", "details": branches})
     return jsonify({"message": "Failed"})
 
@@ -58,18 +58,15 @@ def get_branches():
 def get_agencys():
     user = request.user
     compony_code = user.get('compony_code')
-    data = request.get_json()
+    data = request.get_json() or {}
     branch_id = data.get('_id')
-
-    if not data or not branch_id:
-        return jsonify({"message": "No JSON body received"}), 400
 
     if not compony_code:
         return jsonify({"message": "compony_code is requerd"})
     componyCode = ComponyModel(compony_code)
     agencys = componyCode._get_agents(
         compony_code, branch_id)
-    if agencys:
+    if isinstance(agencys, list):
         return jsonify({"message": "success", "details": agencys})
     return jsonify({"message": "Failed"})
 
