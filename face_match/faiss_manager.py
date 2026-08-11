@@ -24,6 +24,7 @@ class FaceIndexManager:
                 instance.vector_to_doc_id: Dict[int, str] = {}
                 instance.modify_lock = threading.RLock()
                 instance.last_loaded_time = 0
+                instance.last_loaded_size = 0
                 cls._instances[company_code] = instance
             return cls._instances[company_code]
 
@@ -91,7 +92,8 @@ class FaceIndexManager:
         
         if os.path.exists(map_path):
             current_mtime = os.path.getmtime(map_path)
-            if self.index is None or current_mtime > self.last_loaded_time:
+            current_size = os.path.getsize(map_path)
+            if self.index is None or current_mtime > self.last_loaded_time or current_size != self.last_loaded_size:
                 needs_load = True
         elif self.index is None:
             needs_rebuild = True
@@ -100,7 +102,8 @@ class FaceIndexManager:
             with self.modify_lock:
                 if os.path.exists(map_path):
                     current_mtime = os.path.getmtime(map_path)
-                    if self.index is None or current_mtime > self.last_loaded_time:
+                    current_size = os.path.getsize(map_path)
+                    if self.index is None or current_mtime > self.last_loaded_time or current_size != self.last_loaded_size:
                         self.load_from_disk()
                 elif self.index is None:
                     self.rebuild_index()
@@ -120,15 +123,16 @@ class FaceIndexManager:
                 current_index = self.index
                 current_vector_to_doc_id = self.vector_to_doc_id
 
-        if current_index is None or current_index.ntotal == 0:
-            return []
+        with self.modify_lock:
+            if current_index is None or current_index.ntotal == 0:
+                return []
 
-        if query.shape[1] != current_index.d:
-            logger.error(f"[{self.company_code}] Dimension mismatch even after rebuild (query: {query.shape[1]}, index: {current_index.d})")
-            return []
+            if query.shape[1] != current_index.d:
+                logger.error(f"[{self.company_code}] Dimension mismatch even after rebuild (query: {query.shape[1]}, index: {current_index.d})")
+                return []
 
-        search_k = min(k * 2, current_index.ntotal)
-        distances, indices = current_index.search(query, search_k)
+            search_k = min(k * 2, current_index.ntotal)
+            distances, indices = current_index.search(query, search_k)
 
         matched_mongo_ids = []
         valid_matches = []
@@ -184,7 +188,30 @@ class FaceIndexManager:
 
     def add_employee(self, employee_doc: dict):
         with self.modify_lock:
-            self.rebuild_index()
+            if self.index is None:
+                self.rebuild_index()
+                return
+
+            enc_data = employee_doc.get("encodings_v2") or employee_doc.get("encodings")
+            if not enc_data:
+                return
+
+            poses = enc_data if isinstance(enc_data[0], list) else [enc_data]
+            enc_batch = []
+            dimension = 128
+
+            for pose_vec in poses:
+                if isinstance(pose_vec, list) and len(pose_vec) == dimension:
+                    enc_batch.append(pose_vec)
+
+            if enc_batch:
+                enc_np = np.array(enc_batch, dtype=np.float32)
+                start_idx = self.index.ntotal
+                self.index.add(enc_np)
+                mongo_id = str(employee_doc["_id"])
+                for i in range(len(enc_batch)):
+                    self.vector_to_doc_id[start_idx + i] = mongo_id
+                self.save_to_disk()
 
     def remove_employee(self, mongo_id: str):
         with self.modify_lock:
@@ -206,6 +233,7 @@ class FaceIndexManager:
         with open(map_path, "wb") as f:
             pickle.dump({"vector_to_doc_id": self.vector_to_doc_id}, f)
         self.last_loaded_time = os.path.getmtime(map_path)
+        self.last_loaded_size = os.path.getsize(map_path)
 
     def load_from_disk(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -224,6 +252,7 @@ class FaceIndexManager:
                     data = pickle.load(f)
                     self.vector_to_doc_id = data.get("vector_to_doc_id", {})
                 self.last_loaded_time = os.path.getmtime(map_path)
+                self.last_loaded_size = os.path.getsize(map_path)
             return True
         except Exception as e:
             logger.error(f"Failed to load FAISS index from disk: {e}")

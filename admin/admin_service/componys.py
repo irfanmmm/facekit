@@ -135,7 +135,7 @@ def fech_client_details(compony_code, limit=10, offset=0, date=None):
         except Exception as e:
             print(f"Error fetching attendance: {e}")
 
-    query = {}
+    query = {"is_delete": {"$ne": True}}
 
     if date:
         query["employee_code"] = {
@@ -321,7 +321,7 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
         except Exception as e:
             print(f"Error fetching attendance in search: {e}")
 
-    query_parts = []
+    query_parts = [{"is_delete": {"$ne": True}}]
     
     
     office_kit = OnboardingOfficekit(compony_code)

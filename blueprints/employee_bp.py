@@ -91,10 +91,10 @@ def add_employee_face():
     )
 
 
-    message = message if message else "somthing went wrong"
+    message = message if message else "something went wrong"
     if status:
-        return jsonify({"message": message})
-    return jsonify({"message": message})
+        return jsonify({"status": True, "message": message}), 200
+    return jsonify({"status": False, "message": message}), 200
 
 
 @employee_bp.route("/compare-face", methods=['POST'])

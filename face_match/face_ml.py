@@ -1,6 +1,23 @@
 import logging
 import cv2
 import os
+import fcntl
+import contextlib
+import threading
+import re
+
+_global_thread_lock = threading.Lock()
+
+@contextlib.contextmanager
+def process_lock(lock_path):
+    with _global_thread_lock:
+        with open(lock_path, 'w') as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
 import numpy as np
 try:
     import face_recognition as fr
@@ -371,70 +388,85 @@ class FaceAttendance:
 
 
 
-            # Generate / validate employee code
-            compony = ComponyModel(compony_code=company_code)
-            if not employeecode:
-                employee_code = compony._generate_employee_code(company_code)
-            else:
-                employee_code = employeecode.strip() if employeecode else employeecode
-                if compony._check_employee_code(company_code, employee_code):
-                    return False, "This employee already exists"
+            with process_lock(f"/tmp/facekit_add_face_{company_code}.lock"):
+                db = get_database(company_code)
+                collection = db[f"encodings_{company_code}"]
 
-            # Save primary photo to disk
-            if primary_image is not None:
-                filename = f"user_{employee_code}_{branch}_{agency}_{fullname}_{company_code}.jpg"
-                filepath = os.path.join(uploads_path, filename)
-                cv2.imwrite(filepath, primary_image)
+                if fullname and str(fullname).strip():
+                    clean_fullname = str(fullname).strip()
+                    existing_by_name = collection.find_one({
+                        "fullname": {"$regex": f"^{re.escape(clean_fullname)}$", "$options": "i"},
+                        "is_delete": {"$ne": True}
+                    })
+                    if existing_by_name:
+                        msg = f"An employee with the name '{clean_fullname}' is already registered ({existing_by_name.get('employee_code')})."
+                        logger.info(msg)
+                        return False, msg
 
-            # Duplicate check against every pose (SFace 128-d space)
-            DUPLICATE_CHECK_THRESHOLD = 0.75
-            cashe = FaceIndexManager(company_code)
+                # Generate / validate employee code
+                compony = ComponyModel(compony_code=company_code)
+                if not employeecode:
+                    employee_code = compony._generate_employee_code(company_code)
+                else:
+                    employee_code = employeecode.strip() if employeecode else employeecode
+                    if compony._check_employee_code(company_code, employee_code):
+                        return False, "This employee already exists"
 
+                # Save primary photo to disk
+                if primary_image is not None:
+                    filename = f"user_{employee_code}_{branch}_{agency}_{fullname}_{company_code}.jpg"
+                    filepath = os.path.join(uploads_path, filename)
+                    cv2.imwrite(filepath, primary_image)
 
-
-            for pose_vec in current_encodings:
-                search_enc = np.array(pose_vec, dtype=np.float32)
-                candidates = cashe.search(search_enc, k=10, threshold=DUPLICATE_CHECK_THRESHOLD)
-                if candidates:
-                    matched_emp_code = candidates[0]["employee"].get("employee_code", "")
-                    if matched_emp_code and matched_emp_code == employee_code:
-                        continue
-
-                    matched_emp = candidates[0]["employee"].get("fullname", "Unknown")
-                    matched_dist = candidates[0]["distance"]
-                    msg = f"This face is already registered to employee '{matched_emp}' ({matched_emp_code})."
-                    print(f"⚠️ Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
-                    logger.info(f"Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
-                    return False, msg
+                # Duplicate check against every pose (SFace 128-d space)
+                DUPLICATE_CHECK_THRESHOLD = 1.15
+                cashe = FaceIndexManager(company_code)
 
 
-            # Store all pose encodings in MongoDB
-            data = {
-                "company_code": company_code,
-                "employee_code": employee_code,
-                "branch": branch,
-                "agency": agency,
-                "fullname": fullname,
-                "existing_user_officekit": existing_office_kit_user,
-                "encodings": current_encodings,
-                "encodings_v2": current_encodings,  # SFace 128-d vectors
-                "created_date": datetime.now()
-            }
 
-            db = get_database(company_code)
-            collection = db[f"encodings_{company_code}"]
-            result = collection.insert_one(data)
+                for pose_vec in current_encodings:
+                    search_enc = np.array(pose_vec, dtype=np.float32)
+                    candidates = cashe.search(search_enc, k=10, threshold=DUPLICATE_CHECK_THRESHOLD)
+                    if candidates:
+                        matched_emp_code = candidates[0]["employee"].get("employee_code", "")
+                        if matched_emp_code and matched_emp_code == employee_code:
+                            continue
 
-            cashe.add_employee({
-                "_id": result.inserted_id,
-                "encodings_v2": current_encodings,
-                "company_code": company_code,
-                "employee_code": employee_code,
-                "branch": branch,
-                "agency": agency,
-                "fullname": fullname,
-                "existing_user_officekit": existing_office_kit_user
-            })
+                        matched_emp = candidates[0]["employee"].get("fullname", "Unknown")
+                        matched_dist = candidates[0]["distance"]
+                        msg = f"This face is already registered to employee '{matched_emp}' ({matched_emp_code})."
+                        print(f"⚠️ Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
+                        logger.info(f"Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
+                        return False, msg
+
+
+                # Store all pose encodings in MongoDB
+                data = {
+                    "company_code": company_code,
+                    "employee_code": employee_code,
+                    "branch": branch,
+                    "agency": agency,
+                    "fullname": fullname,
+                    "existing_user_officekit": existing_office_kit_user,
+                    "encodings": current_encodings,
+                    "encodings_v2": current_encodings,  # SFace 128-d vectors
+                    "created_date": datetime.now()
+                }
+
+                db = get_database(company_code)
+                collection = db[f"encodings_{company_code}"]
+                result = collection.insert_one(data)
+
+                cashe.add_employee({
+                    "_id": result.inserted_id,
+                    "encodings_v2": current_encodings,
+                    "company_code": company_code,
+                    "employee_code": employee_code,
+                    "branch": branch,
+                    "agency": agency,
+                    "fullname": fullname,
+                    "existing_user_officekit": existing_office_kit_user
+                })
 
             if Settings.get_setting(company_code, "Office Kit Onboarding"):
                 import threading
