@@ -42,15 +42,19 @@ def get_branches():
     data = request.get_json()
     if not data:
         return jsonify({"message": "No JSON body received"}), 400
-    offset = data.get("offset")
-    limit = data.get("limit")
+    offset = data.get("offset") or 1
+    limit = data.get("limit") or 1000
     search = data.get("search")
 
     componyCode = ComponyModel(compony_code)
     branches = componyCode._get_branch(
         compony_code, offset, limit, search)
-    if isinstance(branches, list):
+        
+    if isinstance(branches, dict) and "data" in branches:
+        return jsonify({"message": "success", "details": branches["data"]})
+    elif isinstance(branches, list):
         return jsonify({"message": "success", "details": branches})
+        
     return jsonify({"message": "Failed"})
 
 @branch_bp.route("/get-agency", methods=['POST'])

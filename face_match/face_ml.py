@@ -274,32 +274,13 @@ class FaceAttendance:
             if current_encoding is None:
                 return False, "Could not detect or extract face from camera image"
 
-            # OpenCV SFace L2 Distance Match Threshold (0.85 for robust mobile matching under lighting/angle variations)
+            # OpenCV SFace L2 Distance Match Threshold (Stricter for 1-to-N identification)
             MAX_ALLOWED_DISTANCE = 0.85
             manager = FaceIndexManager(company_code)
             candidates = manager.search(
                 current_encoding, k=10, threshold=MAX_ALLOWED_DISTANCE
             )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            
             if not candidates:
                 return False, "No matching face found"
 
@@ -406,7 +387,7 @@ class FaceAttendance:
                 cv2.imwrite(filepath, primary_image)
 
             # Duplicate check against every pose (SFace 128-d space)
-            DUPLICATE_CHECK_THRESHOLD = 0.85
+            DUPLICATE_CHECK_THRESHOLD = 0.75
             cashe = FaceIndexManager(company_code)
 
 
@@ -435,7 +416,8 @@ class FaceAttendance:
                 "agency": agency,
                 "fullname": fullname,
                 "existing_user_officekit": existing_office_kit_user,
-                "encodings": current_encodings,  # list of 128-d dlib vectors
+                "encodings": current_encodings,
+                "encodings_v2": current_encodings,  # SFace 128-d vectors
                 "created_date": datetime.now()
             }
 
@@ -445,7 +427,7 @@ class FaceAttendance:
 
             cashe.add_employee({
                 "_id": result.inserted_id,
-                "encodings": current_encodings,
+                "encodings_v2": current_encodings,
                 "company_code": company_code,
                 "employee_code": employee_code,
                 "branch": branch,

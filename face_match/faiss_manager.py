@@ -13,17 +13,19 @@ logger = logging.getLogger("faiss_manager")
 
 class FaceIndexManager:
     _instances = {}
+    _init_lock = threading.Lock()
 
     def __new__(cls, company_code: str):
-        if company_code not in cls._instances:
-            instance = super(FaceIndexManager, cls).__new__(cls)
-            instance.company_code = company_code
-            instance.index: Optional[faiss.Index] = None
-            instance.vector_to_doc_id: Dict[int, str] = {}
-            instance.modify_lock = threading.RLock()
-            instance.last_loaded_time = 0
-            cls._instances[company_code] = instance
-        return cls._instances[company_code]
+        with cls._init_lock:
+            if company_code not in cls._instances:
+                instance = super(FaceIndexManager, cls).__new__(cls)
+                instance.company_code = company_code
+                instance.index: Optional[faiss.Index] = None
+                instance.vector_to_doc_id: Dict[int, str] = {}
+                instance.modify_lock = threading.RLock()
+                instance.last_loaded_time = 0
+                cls._instances[company_code] = instance
+            return cls._instances[company_code]
 
     def rebuild_index(self):
         """Rebuild FAISS index from DB in batches. Uses exact IndexFlatL2."""
@@ -38,15 +40,15 @@ class FaceIndexManager:
             batch_size = 10000
 
             cursor = collection.find(
-                {"is_delete": {"$ne": True}},
-                {"encodings": 1, "_id": 1, "employee_code": 1}
+                {"is_delete": {"$ne": True}, "encodings_v2": {"$exists": True}},
+                {"encodings_v2": 1, "_id": 1, "employee_code": 1}
             ).batch_size(batch_size)
 
             encodings_batch = []
             current_idx = 0
 
             for doc in cursor:
-                enc_data = doc.get("encodings")
+                enc_data = doc.get("encodings_v2")
                 if not enc_data:
                     continue
 
@@ -84,41 +86,61 @@ class FaceIndexManager:
 
         map_path = os.path.join(index_dir, f"faiss_map_{self.company_code}.pkl")
 
+        needs_load = False
+        needs_rebuild = False
+        
         if os.path.exists(map_path):
             current_mtime = os.path.getmtime(map_path)
             if self.index is None or current_mtime > self.last_loaded_time:
-                self.load_from_disk()
+                needs_load = True
         elif self.index is None:
-            self.rebuild_index()
+            needs_rebuild = True
+
+        if needs_load or needs_rebuild:
+            with self.modify_lock:
+                if os.path.exists(map_path):
+                    current_mtime = os.path.getmtime(map_path)
+                    if self.index is None or current_mtime > self.last_loaded_time:
+                        self.load_from_disk()
+                elif self.index is None:
+                    self.rebuild_index()
+
+        with self.modify_lock:
+            current_index = self.index
+            current_vector_to_doc_id = self.vector_to_doc_id
 
         query = query_encoding.astype(np.float32).reshape(1, -1)
 
         # Check dimension match — if index on disk has different dimension, force rebuild
-        if self.index is None or self.index.d != query.shape[1]:
+        if current_index is None or current_index.d != query.shape[1]:
             logger.info(f"[{self.company_code}] FAISS index dimension mismatch or uninitialized. Rebuilding index...")
-            self.rebuild_index()
+            with self.modify_lock:
+                if self.index is None or getattr(self.index, 'd', 0) != query.shape[1]:
+                    self.rebuild_index()
+                current_index = self.index
+                current_vector_to_doc_id = self.vector_to_doc_id
 
-        if self.index is None or self.index.ntotal == 0:
+        if current_index is None or current_index.ntotal == 0:
             return []
 
-        if query.shape[1] != self.index.d:
-            logger.error(f"[{self.company_code}] Dimension mismatch even after rebuild (query: {query.shape[1]}, index: {self.index.d})")
+        if query.shape[1] != current_index.d:
+            logger.error(f"[{self.company_code}] Dimension mismatch even after rebuild (query: {query.shape[1]}, index: {current_index.d})")
             return []
 
-        search_k = min(k * 2, self.index.ntotal)
-        distances, indices = self.index.search(query, search_k)
+        search_k = min(k * 2, current_index.ntotal)
+        distances, indices = current_index.search(query, search_k)
 
         matched_mongo_ids = []
         valid_matches = []
 
         for dist_l2, idx in zip(distances[0], indices[0]):
-            if idx < 0 or idx >= len(self.vector_to_doc_id):
+            if idx < 0 or idx >= len(current_vector_to_doc_id):
                 continue
             distance = float(np.sqrt(dist_l2))
             if distance > threshold:
                 continue
 
-            mongo_id = self.vector_to_doc_id.get(idx)
+            mongo_id = current_vector_to_doc_id.get(idx)
             if mongo_id:
                 try:
                     matched_mongo_ids.append(ObjectId(mongo_id))
@@ -137,7 +159,7 @@ class FaceIndexManager:
 
         employee_docs = list(collection.find(
             {"_id": {"$in": matched_mongo_ids}},
-            {"encodings": 0, "existing_user_officekit": 0, "company_code": 0}
+            {"encodings": 0, "encodings_v2": 0, "existing_user_officekit": 0, "company_code": 0}
         ))
 
         doc_map = {str(doc["_id"]): doc for doc in employee_docs}
