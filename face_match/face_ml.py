@@ -647,3 +647,12 @@ class FaceAttendance:
             "confidence_distance": round(distance, 4),
             "message": "Attendance marked successfully"
         }
+
+
+# Pre-load SFace and YuNet ONNX AI models into RAM at server startup
+try:
+    _get_sface_recognizer()
+    _get_yunet_detector()
+except Exception as e:
+    logger.warning(f"Backend AI model pre-warmup warning: {e}")
+
