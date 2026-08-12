@@ -655,16 +655,24 @@ class FaceAttendance:
                 "log_details": [log_entry]
             })
 
-        total_time_seconds = 0
-        if record:
-            total_time_seconds = record.get("total_working_time", 0)
-        
-        if direction == "out":
-            total_time_seconds += duration
+        if officekit_user:
+            try:
+                working_hours = OfficeKitPunching(company_code)
+                duration_str = working_hours.retreve_working_hours(employee["employee_code"])
+            except Exception as e:
+                logger.error(f"Failed to retrieve working hours from OfficeKit: {e}")
+                duration_str = "00:00:00"
+        else:
+            total_time_seconds = 0
+            if record:
+                total_time_seconds = record.get("total_working_time", 0)
+            
+            if direction == "out":
+                total_time_seconds += duration
 
-        hours, remainder = divmod(total_time_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        duration_str = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+            hours, remainder = divmod(total_time_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            duration_str = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
 
         if officekit_user:
             import threading
