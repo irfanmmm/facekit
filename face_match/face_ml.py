@@ -655,9 +655,17 @@ class FaceAttendance:
                 "log_details": [log_entry]
             })
 
-        # if officekit_user:
+        total_time_seconds = 0
+        if record:
+            total_time_seconds = record.get("total_working_time", 0)
         
-        duration = "00:00:00"
+        if direction == "out":
+            total_time_seconds += duration
+
+        hours, remainder = divmod(total_time_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        duration_str = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+
         if officekit_user:
             import threading
             def _bg_punch(dir_val, emp_code, comp_code):
@@ -675,7 +683,7 @@ class FaceAttendance:
             "fullname": employee["fullname"],
             "employee_code": employee["employee_code"],
             "direction": direction,
-            "working_time": duration,
+            "working_time": duration_str,
             "confidence_distance": round(distance, 4),
             "message": "Attendance marked successfully"
         }
