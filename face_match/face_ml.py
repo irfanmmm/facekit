@@ -150,19 +150,36 @@ def validate_face_image(image):
         detector.setInputSize((w, h))
         _, faces = detector.detect(image)
 
-        if faces is None or len(faces) == 0:
+        # Check if we need rotation fallback (no faces or low confidence)
+        needs_rotation = True
+        if faces is not None and len(faces) > 0:
+            max_conf = max([float(f[14]) if len(f) > 14 else 1.0 for f in faces])
+            if max_conf >= 0.20:
+                needs_rotation = False
+
+        if needs_rotation:
             # Auto-rotate fallback for mobile images sent sideways (90° CW, 90° CCW, 180°)
+            best_rot_faces = None
+            best_rot_img = None
+            best_conf = 0.0
+
             for rot_flag in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
                 rot_img = cv2.rotate(image, rot_flag)
                 rh, rw = rot_img.shape[:2]
                 detector.setInputSize((rw, rh))
                 _, rfaces = detector.detect(rot_img)
                 if rfaces is not None and len(rfaces) > 0:
-                    logger.info(f"🔄 Auto-rotated image by rotation flag {rot_flag} to detect face.")
-                    image = rot_img
-                    faces = rfaces
-                    h, w = rh, rw
-                    break
+                    r_conf = max([float(f[14]) if len(f) > 14 else 1.0 for f in rfaces])
+                    if r_conf > best_conf:
+                        best_conf = r_conf
+                        best_rot_faces = rfaces
+                        best_rot_img = rot_img
+                        h, w = rh, rw
+            
+            if best_rot_faces is not None and best_conf >= 0.20:
+                logger.info(f"🔄 Auto-rotated image for better face detection (conf: {best_conf:.2f}).")
+                image = best_rot_img
+                faces = best_rot_faces
 
         if faces is None or len(faces) == 0:
             return False, "No clear face detected. Please hold steady facing the camera.", None
@@ -176,8 +193,52 @@ def validate_face_image(image):
         if confidence < 0.20:
             return False, f"Face feature confidence low ({confidence:.2f}). Please hold steady facing camera.", None
 
+        # Check if all 5 facial landmarks are within the frame bounds and face angle is straight
+        if len(face_box) >= 14:
+            landmarks_x = face_box[4:14:2]
+            landmarks_y = face_box[5:14:2]
+            margin = 2
+            for lx, ly in zip(landmarks_x, landmarks_y):
+                if lx < margin or lx > w - margin or ly < margin or ly > h - margin:
+                    return False, "Face is partially outside the frame. Please center your face.", None
+
+            # Pose validation (Roll, Yaw, Pitch)
+            # 0: right eye, 1: left eye, 2: nose tip, 3: right mouth, 4: left mouth
+            eye_dx = landmarks_x[1] - landmarks_x[0]
+            eye_dy = landmarks_y[1] - landmarks_y[0]
+            
+            # Roll Check
+            if eye_dx != 0:
+                roll = abs(eye_dy / eye_dx)
+                if roll > 0.4:
+                    return False, "Head is tilted sideways. Please keep your head straight.", None
+            
+            # Yaw Check
+            eye_w = abs(landmarks_x[1] - landmarks_x[0])
+            if eye_w > 0:
+                dist_r = abs(landmarks_x[2] - landmarks_x[0])
+                dist_l = abs(landmarks_x[2] - landmarks_x[1])
+                yaw_ratio = min(dist_r, dist_l) / max(dist_r, dist_l) if max(dist_r, dist_l) > 0 else 1
+                if yaw_ratio < 0.35:
+                    return False, "Face is turned sideways. Please look straight at the camera.", None
+
+            # Pitch Check
+            eyes_y = (landmarks_y[0] + landmarks_y[1]) / 2
+            nose_y = landmarks_y[2]
+            mouth_y = (landmarks_y[3] + landmarks_y[4]) / 2
+            dist_eyes_nose = abs(nose_y - eyes_y)
+            dist_nose_mouth = abs(mouth_y - nose_y)
+            
+            if dist_eyes_nose > 0 and dist_nose_mouth > 0:
+                pitch_ratio = dist_eyes_nose / dist_nose_mouth
+                if pitch_ratio < 0.45 or pitch_ratio > 2.2:
+                    return False, "Head is tilted too far up or down. Please look straight.", None
         bbox = face_box[:4].astype(int)
         face_x, face_y, face_w, face_h = max(0, bbox[0]), max(0, bbox[1]), bbox[2], bbox[3]
+
+        # Check if the face bounding box is fully inside the frame
+        if bbox[0] < 0 or bbox[1] < 0 or bbox[0] + bbox[2] > w or bbox[1] + bbox[3] > h:
+            return False, "Face is too close to the edge of the frame. Please step back and center your face.", None
 
         if face_w < 40 or face_h < 40:
             return False, "Face too small. Move closer to the camera.", None
@@ -355,7 +416,19 @@ class FaceAttendance:
                         img_bytes = base64.b64decode(img_b64)
                         np_arr = np.frombuffer(img_bytes, np.uint8)
                         image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                    except Exception:
+
+                        # Debug: Save image to test it
+                        # if image is not None:
+                        #     import time
+                        #     import os
+                        #     debug_dir = "/home/ubuntu/facekit/facekit/scratch"
+                        #     os.makedirs(debug_dir, exist_ok=True)
+                        #     debug_path = os.path.join(debug_dir, f"test_add_face_{int(time.time())}_{idx}.jpg")
+                        #     cv2.imwrite(debug_path, image)
+                        #     logger.info(f"Saved debug image to {debug_path}")
+
+                    except Exception as e:
+                        logger.error(f"Error decoding image: {e}")
                         image = None
 
                     if image is None:
@@ -392,16 +465,22 @@ class FaceAttendance:
                 db = get_database(company_code)
                 collection = db[f"encodings_{company_code}"]
 
-                if fullname and str(fullname).strip():
-                    clean_fullname = str(fullname).strip()
-                    existing_by_name = collection.find_one({
-                        "fullname": {"$regex": f"^{re.escape(clean_fullname)}$", "$options": "i"},
-                        "is_delete": {"$ne": True}
-                    })
-                    if existing_by_name:
-                        msg = f"An employee with the name '{clean_fullname}' is already registered ({existing_by_name.get('employee_code')})."
-                        logger.info(msg)
-                        return False, msg
+                # Allow duplicate names for new employees (employee_code is the unique identifier)
+                # if fullname and str(fullname).strip():
+                #     clean_fullname = str(fullname).strip()
+                #     existing_by_name = collection.find_one({
+                #         "fullname": {"$regex": f"^{re.escape(clean_fullname)}$", "$options": "i"},
+                #         "is_delete": {"$ne": True}
+                #     })
+                #     if existing_by_name:
+                #         existing_code = existing_by_name.get('employee_code')
+                #         if employeecode and existing_code == employeecode:
+                #             # It's the same employee being updated, so don't block
+                #             pass
+                #         else:
+                #             msg = f"An employee with the name '{clean_fullname}' is already registered ({existing_code})."
+                #             logger.info(msg)
+                #             return False, msg
 
                 # Generate / validate employee code
                 compony = ComponyModel(compony_code=company_code)
@@ -419,7 +498,8 @@ class FaceAttendance:
                     cv2.imwrite(filepath, primary_image)
 
                 # Duplicate check against every pose (SFace 128-d space)
-                DUPLICATE_CHECK_THRESHOLD = 1.15
+                # Adjusted threshold to 1.05 to balance catching true duplicates without false positives
+                DUPLICATE_CHECK_THRESHOLD = 1.05
                 cashe = FaceIndexManager(company_code)
 
 
