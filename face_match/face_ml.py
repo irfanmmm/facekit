@@ -95,6 +95,95 @@ def _quick_sanity_check(image_rgb: np.ndarray):
     return True, "ok"
 
 
+# Canonical 3D face landmark positions (rough, in mm, arbitrary but internally consistent scale).
+# Order matches YuNet's 5-point landmark order: right eye, left eye, nose tip,
+# right mouth corner, left mouth corner.
+_MODEL_3D_POINTS = np.array([
+    [-30.0,  30.0, -30.0],  # right eye
+    [ 30.0,  30.0, -30.0],  # left eye
+    [  0.0,   0.0,   0.0],  # nose tip
+    [-25.0, -30.0, -20.0],  # right mouth corner
+    [ 25.0, -30.0, -20.0],  # left mouth corner
+], dtype=np.float64)
+
+
+def _estimate_head_pose(landmarks_x, landmarks_y, w, h):
+    """
+    Real 3D head-pose estimation via solvePnP, using the 5 landmarks YuNet already
+    provides. Returns (pitch, yaw, roll) in degrees, or None if solvePnP fails to converge.
+
+    This replaces the old 2D eye/nose/mouth y-distance ratio, which is easily thrown off
+    by facial-hair occlusion shifting the mouth landmark, and has no real concept of 3D
+    geometry — it can pass extreme angles by coincidence.
+    """
+    try:
+        image_points = np.array(list(zip(landmarks_x, landmarks_y)), dtype=np.float64)
+        focal_length = w
+        camera_matrix = np.array([
+            [focal_length, 0, w / 2],
+            [0, focal_length, h / 2],
+            [0, 0, 1]
+        ], dtype=np.float64)
+        dist_coeffs = np.zeros((4, 1))
+
+        success = False
+        rvec, tvec = None, None
+        for flag in [getattr(cv2, 'SOLVEPNP_SQPNP', None), getattr(cv2, 'SOLVEPNP_EPNP', None), getattr(cv2, 'SOLVEPNP_ITERATIVE', None)]:
+            if flag is None:
+                continue
+            try:
+                success, rvec, tvec = cv2.solvePnP(
+                    _MODEL_3D_POINTS, image_points, camera_matrix, dist_coeffs,
+                    flags=flag
+                )
+                if success:
+                    break
+            except Exception:
+                continue
+
+        if not success or rvec is None:
+            return None
+
+        rmat, _ = cv2.Rodrigues(rvec)
+        sy = np.sqrt(rmat[0, 0] ** 2 + rmat[1, 0] ** 2)
+        singular = sy < 1e-6
+
+        if not singular:
+            pitch = np.degrees(np.arctan2(-rmat[2, 0], sy))
+            yaw = np.degrees(np.arctan2(rmat[1, 0], rmat[0, 0]))
+            roll = np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2]))
+        else:
+            pitch = np.degrees(np.arctan2(-rmat[2, 0], sy))
+            yaw = 0.0
+            roll = np.degrees(np.arctan2(-rmat[1, 2], rmat[1, 1]))
+
+        return float(pitch), float(yaw), float(roll)
+    except Exception as e:
+        logger.warning(f"solvePnP head-pose estimation failed: {e}")
+        return None
+
+
+def _landmark_plausibility_check(landmarks_x, landmarks_y):
+    """
+    Sanity check independent of facial hair: interpupillary distance (eye_w) is a stable
+    reference regardless of beard/occlusion. If dist_nose_mouth is wildly out of proportion
+    to eye_w, the mouth landmark was probably placed unreliably (e.g. guessed through a
+    beard) — flag it so a bad photo doesn't get a false "pass" from noisy landmarks.
+    """
+    eye_w = abs(landmarks_x[1] - landmarks_x[0])
+    if eye_w <= 0:
+        return True  # can't evaluate, don't block on this check alone
+
+    mouth_y = (landmarks_y[3] + landmarks_y[4]) / 2
+    nose_y = landmarks_y[2]
+    dist_nose_mouth = abs(mouth_y - nose_y)
+
+    ratio = dist_nose_mouth / eye_w
+    # A plausible nose-to-mouth distance is roughly 0.3x-1.3x the interpupillary distance
+    # for a face at a normal angle. Well outside that suggests unreliable landmarks.
+    return 0.25 <= ratio <= 1.5
+
+
 _SFACE_RECOGNIZER = None
 _YUNET_DETECTOR = None
 
@@ -202,43 +291,42 @@ def validate_face_image(image, enable_rotation=False):
                 if lx < landmark_margin or lx > w - landmark_margin or ly < landmark_margin or ly > h - landmark_margin:
                     return False, "Facial features (eyes/mouth) are partially outside the frame. Please center your face.", None
 
-            # Pose validation (Roll, Yaw, Pitch)
-            # 0: right eye, 1: left eye, 2: nose tip, 3: right mouth, 4: left mouth
-            eye_dx = landmarks_x[1] - landmarks_x[0]
-            eye_dy = landmarks_y[1] - landmarks_y[0]
-            
-            # Roll Check
-            if eye_dx != 0:
-                roll = abs(eye_dy / eye_dx)
-                if roll > 0.4:
-                    return False, "Head is tilted sideways. Please keep your head straight.", None
-            
-            # Yaw Check (Head turned left/right)
-            eye_w = abs(landmarks_x[1] - landmarks_x[0])
-            if eye_w > 0:
-                dist_r = abs(landmarks_x[2] - landmarks_x[0])
-                dist_l = abs(landmarks_x[2] - landmarks_x[1])
-                yaw_ratio = min(dist_r, dist_l) / max(dist_r, dist_l) if max(dist_r, dist_l) > 0 else 1
-                if yaw_ratio < 0.58:
-                    return False, "Face is turned sideways. Please look straight at the camera.", None
-
             # Nose Centering Check (Prevents half-cut-off faces)
             nose_x_ratio = landmarks_x[2] / w
             nose_y_ratio = landmarks_y[2] / h
             if nose_x_ratio < 0.25 or nose_x_ratio > 0.75 or nose_y_ratio < 0.25 or nose_y_ratio > 0.75:
                 return False, "Face is off-center or partially outside the frame. Please center your face.", None
 
-            # Pitch Check
-            eyes_y = (landmarks_y[0] + landmarks_y[1]) / 2
-            nose_y = landmarks_y[2]
-            mouth_y = (landmarks_y[3] + landmarks_y[4]) / 2
-            dist_eyes_nose = abs(nose_y - eyes_y)
-            dist_nose_mouth = abs(mouth_y - nose_y)
-            
-            if dist_eyes_nose > 0 and dist_nose_mouth > 0:
-                pitch_ratio = dist_eyes_nose / dist_nose_mouth
-                if pitch_ratio < 0.45 or pitch_ratio > 2.2:
-                    return False, "Head is tilted too far up or down. Please look straight.", None
+            # Pitch/Yaw/Roll Check — real 3D head-pose via solvePnP, not a 2D distance ratio.
+            # This is far more resistant to landmark noise from facial hair, glasses, etc.,
+            # and catches the "camera held low, looking down at phone" pattern reliably —
+            # a common failure mode for elderly users who hold the phone at chest height.
+
+            # First: sanity-check the landmarks themselves before trusting pose math built on them.
+            if not _landmark_plausibility_check(landmarks_x, landmarks_y):
+                return False, "Could not reliably read facial features. Please ensure your face is unobstructed and try again.", None
+
+            pose = _estimate_head_pose(landmarks_x, landmarks_y, w, h)
+            if pose is not None:
+                pitch, yaw_deg, roll_deg = pose
+
+                MAX_PITCH_DEG = 15.0  # up/down tilt — tune after testing real bad-angle samples
+                MAX_YAW_DEG = 20.0    # left/right turn
+                MAX_ROLL_DEG = 15.0   # sideways head tilt
+
+                if abs(pitch) > MAX_PITCH_DEG:
+                    direction = "down" if pitch > 0 else "up"
+                    return False, f"Head is tilted too far {direction}. Please hold the phone at eye level and look straight at the camera.", None
+
+                if abs(yaw_deg) > MAX_YAW_DEG:
+                    return False, "Face is turned to the side. Please look straight at the camera.", None
+
+                if abs(roll_deg) > MAX_ROLL_DEG:
+                    return False, "Head is tilted sideways. Please keep your head straight.", None
+            else:
+                # solvePnP failed to converge — landmarks were too degenerate to trust.
+                # Fail closed rather than silently skipping the pose check.
+                return False, "Could not determine face angle. Please hold steady facing the camera.", None
         bbox = face_box[:4].astype(int)
         face_x, face_y, face_w, face_h = max(0, bbox[0]), max(0, bbox[1]), bbox[2], bbox[3]
 
