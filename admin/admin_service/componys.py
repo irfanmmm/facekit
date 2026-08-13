@@ -171,12 +171,14 @@ def fech_client_details(compony_code, limit=10, offset=0, date=None):
             emp_codes_set = {str(emp.get("employee_code", "")).lower() for emp in emp_details if emp.get("employee_code")}
             
             for filename in os.listdir(upload_dir):
-                full_name = filename.lower()
-                for emp_code in list(emp_codes_set):
-                    if emp_code and emp_code in full_name:
-                        image_map[emp_code] = filename
-                        emp_codes_set.remove(emp_code)
-                        break
+                # Filename format: user_{emp_code}_{time}_{random}_{name}_{company}.jpg
+                if filename.startswith("user_"):
+                    parts = filename.split('_')
+                    if len(parts) >= 2:
+                        file_emp_code = parts[1].lower()
+                        if file_emp_code in emp_codes_set:
+                            image_map[file_emp_code] = filename
+                            emp_codes_set.remove(file_emp_code)
                 if not emp_codes_set:
                     break
 
@@ -382,12 +384,13 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
         if os.path.exists(upload_dir):
             emp_codes_set = {str(emp.get("employee_code", "")).lower() for emp in emp_details if emp.get("employee_code")}
             for filename in os.listdir(upload_dir):
-                full_name = filename.lower()
-                for emp_code in list(emp_codes_set):
-                    if emp_code and emp_code in full_name:
-                        image_map[emp_code] = filename
-                        emp_codes_set.remove(emp_code)
-                        break
+                if filename.startswith("user_"):
+                    parts = filename.split('_')
+                    if len(parts) >= 2:
+                        file_emp_code = parts[1].lower()
+                        if file_emp_code in emp_codes_set:
+                            image_map[file_emp_code] = filename
+                            emp_codes_set.remove(file_emp_code)
                 if not emp_codes_set:
                     break
     except Exception as e:

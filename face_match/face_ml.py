@@ -126,7 +126,7 @@ def _get_yunet_detector():
     return _YUNET_DETECTOR
 
 
-def validate_face_image(image):
+def validate_face_image(image, enable_rotation=False):
     """
     Validates face quality and extracts 128-d SFace embedding vector.
     Expects BGR image format from OpenCV imdecode/imread.
@@ -157,7 +157,7 @@ def validate_face_image(image):
             if max_conf >= 0.20:
                 needs_rotation = False
 
-        if needs_rotation:
+        if needs_rotation and enable_rotation:
             # Auto-rotate fallback for mobile images sent sideways (90° CW, 90° CCW, 180°)
             best_rot_faces = None
             best_rot_img = None
@@ -197,10 +197,10 @@ def validate_face_image(image):
         if len(face_box) >= 14:
             landmarks_x = face_box[4:14:2]
             landmarks_y = face_box[5:14:2]
-            margin = 2
+            landmark_margin = 5
             for lx, ly in zip(landmarks_x, landmarks_y):
-                if lx < margin or lx > w - margin or ly < margin or ly > h - margin:
-                    return False, "Face is partially outside the frame. Please center your face.", None
+                if lx < landmark_margin or lx > w - landmark_margin or ly < landmark_margin or ly > h - landmark_margin:
+                    return False, "Facial features (eyes/mouth) are partially outside the frame. Please center your face.", None
 
             # Pose validation (Roll, Yaw, Pitch)
             # 0: right eye, 1: left eye, 2: nose tip, 3: right mouth, 4: left mouth
@@ -213,14 +213,20 @@ def validate_face_image(image):
                 if roll > 0.4:
                     return False, "Head is tilted sideways. Please keep your head straight.", None
             
-            # Yaw Check
+            # Yaw Check (Head turned left/right)
             eye_w = abs(landmarks_x[1] - landmarks_x[0])
             if eye_w > 0:
                 dist_r = abs(landmarks_x[2] - landmarks_x[0])
                 dist_l = abs(landmarks_x[2] - landmarks_x[1])
                 yaw_ratio = min(dist_r, dist_l) / max(dist_r, dist_l) if max(dist_r, dist_l) > 0 else 1
-                if yaw_ratio < 0.35:
+                if yaw_ratio < 0.58:
                     return False, "Face is turned sideways. Please look straight at the camera.", None
+
+            # Nose Centering Check (Prevents half-cut-off faces)
+            nose_x_ratio = landmarks_x[2] / w
+            nose_y_ratio = landmarks_y[2] / h
+            if nose_x_ratio < 0.25 or nose_x_ratio > 0.75 or nose_y_ratio < 0.25 or nose_y_ratio > 0.75:
+                return False, "Face is off-center or partially outside the frame. Please center your face.", None
 
             # Pitch Check
             eyes_y = (landmarks_y[0] + landmarks_y[1]) / 2
@@ -236,12 +242,18 @@ def validate_face_image(image):
         bbox = face_box[:4].astype(int)
         face_x, face_y, face_w, face_h = max(0, bbox[0]), max(0, bbox[1]), bbox[2], bbox[3]
 
-        # Check if the face bounding box is fully inside the frame
-        if bbox[0] < 0 or bbox[1] < 0 or bbox[0] + bbox[2] > w or bbox[1] + bbox[3] > h:
-            return False, "Face is too close to the edge of the frame. Please step back and center your face.", None
+        # Bounding box check — YuNet naturally pads bbox a few px beyond image edges,
+        # so allow a small fixed tolerance (10px) to avoid false positives on valid faces.
+        bbox_tol = 10
+        if (bbox[0] < -bbox_tol or
+            bbox[1] < -bbox_tol or
+            bbox[0] + bbox[2] > w + bbox_tol or
+            bbox[1] + bbox[3] > h + bbox_tol):
+            return False, "Face is too close to the edge of the frame. Please center your face.", None
 
-        if face_w < 40 or face_h < 40:
-            return False, "Face too small. Move closer to the camera.", None
+        # Face area coverage check (must cover at least 30% of the cropped image)
+        if (face_w * face_h) < (0.30 * w * h) or face_w < 40 or face_h < 40:
+            return False, "Face too small in frame. Please move closer.", None
 
         # Quality check on raw un-interpolated face crop (Tenengrad Sobel Gradient Focus Metric)
         crop_raw = image[face_y:face_y + face_h, face_x:face_x + face_w]
@@ -263,6 +275,13 @@ def validate_face_image(image):
             return False, f"Face is too dark (score: {brightness:.2f}). Increase lighting.", None
         if brightness > 245:
             return False, f"Face is too bright (score: {brightness:.2f}). Reduce lighting.", None
+
+        # Facial feature texture check — reject false positive non-face images (ears, skin patches, clothing)
+        left_eye_crop = gray[35:55, 25:48]
+        right_eye_crop = gray[35:55, 64:87]
+        avg_eye_std = float(np.std(left_eye_crop) + np.std(right_eye_crop)) / 2.0
+        if avg_eye_std < 5.0:
+            return False, "No clear facial features (eyes) detected. Please face the camera.", None
 
         feat = sface.feature(aligned_face)
         norm = np.linalg.norm(feat)
@@ -434,7 +453,7 @@ class FaceAttendance:
                     if image is None:
                         return False, f"Pose {idx + 1}: Invalid image data"
 
-                    ok, message, encodings = validate_face_image(image)
+                    ok, message, encodings = validate_face_image(image, enable_rotation=True)
                     if not ok or not encodings:
                         return False, f"Pose {idx + 1}: {message}"
 
@@ -507,13 +526,13 @@ class FaceAttendance:
                 for pose_vec in current_encodings:
                     search_enc = np.array(pose_vec, dtype=np.float32)
                     candidates = cashe.search(search_enc, k=10, threshold=DUPLICATE_CHECK_THRESHOLD)
-                    if candidates:
-                        matched_emp_code = candidates[0]["employee"].get("employee_code", "")
+                    for cand in candidates:
+                        matched_emp_code = cand["employee"].get("employee_code", "")
                         if matched_emp_code and matched_emp_code == employee_code:
                             continue
 
-                        matched_emp = candidates[0]["employee"].get("fullname", "Unknown")
-                        matched_dist = candidates[0]["distance"]
+                        matched_emp = cand["employee"].get("fullname", "Unknown")
+                        matched_dist = cand["distance"]
                         msg = f"This face is already registered to employee '{matched_emp}' ({matched_emp_code})."
                         print(f"⚠️ Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
                         logger.info(f"Duplicate face registration blocked! {msg} (Distance: {matched_dist:.3f})")
@@ -580,7 +599,7 @@ class FaceAttendance:
                 return False, "Invalid image format"
 
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            ok, message, encodings = validate_face_image(image_rgb)
+            ok, message, encodings = validate_face_image(image_rgb, enable_rotation=True)
             if not ok or not encodings:
                 return False, message if message else "Face not detected"
 
@@ -629,7 +648,7 @@ class FaceAttendance:
                 return False, "Invalid image format"
 
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            ok, message, encodings = validate_face_image(image_rgb)
+            ok, message, encodings = validate_face_image(image_rgb, enable_rotation=True)
             if not ok or not encodings:
                 return False, message if message else "Could not detect face"
 

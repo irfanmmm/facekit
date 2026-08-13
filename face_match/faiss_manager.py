@@ -41,15 +41,21 @@ class FaceIndexManager:
             batch_size = 10000
 
             cursor = collection.find(
-                {"is_delete": {"$ne": True}, "encodings_v2": {"$exists": True}},
-                {"encodings_v2": 1, "_id": 1, "employee_code": 1}
+                {
+                    "is_delete": {"$ne": True},
+                    "$or": [
+                        {"encodings_v2": {"$exists": True}},
+                        {"encodings": {"$exists": True}}
+                    ]
+                },
+                {"encodings_v2": 1, "encodings": 1, "_id": 1, "employee_code": 1}
             ).batch_size(batch_size)
 
             encodings_batch = []
             current_idx = 0
 
             for doc in cursor:
-                enc_data = doc.get("encodings_v2")
+                enc_data = doc.get("encodings_v2") or doc.get("encodings")
                 if not enc_data:
                     continue
 
