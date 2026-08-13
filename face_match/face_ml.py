@@ -23,6 +23,14 @@ try:
     import face_recognition as fr
 except ImportError:
     fr = None
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
+except ImportError:
+    mp = None
+    mp_python = None
+    mp_vision = None
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any
 from functools import lru_cache
@@ -99,11 +107,11 @@ def _quick_sanity_check(image_rgb: np.ndarray):
 # Order matches YuNet's 5-point landmark order: right eye, left eye, nose tip,
 # right mouth corner, left mouth corner.
 _MODEL_3D_POINTS = np.array([
-    [-30.0,  30.0, -30.0],  # right eye
-    [ 30.0,  30.0, -30.0],  # left eye
+    [-30.0, -30.0,  30.0],  # right eye
+    [ 30.0, -30.0,  30.0],  # left eye
     [  0.0,   0.0,   0.0],  # nose tip
-    [-25.0, -30.0, -20.0],  # right mouth corner
-    [ 25.0, -30.0, -20.0],  # left mouth corner
+    [-25.0,  30.0,  20.0],  # right mouth corner
+    [ 25.0,  30.0,  20.0],  # left mouth corner
 ], dtype=np.float64)
 
 
@@ -149,13 +157,13 @@ def _estimate_head_pose(landmarks_x, landmarks_y, w, h):
         singular = sy < 1e-6
 
         if not singular:
-            pitch = np.degrees(np.arctan2(-rmat[2, 0], sy))
-            yaw = np.degrees(np.arctan2(rmat[1, 0], rmat[0, 0]))
-            roll = np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2]))
+            pitch = np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2]))
+            yaw = np.degrees(np.arctan2(-rmat[2, 0], sy))
+            roll = np.degrees(np.arctan2(rmat[1, 0], rmat[0, 0]))
         else:
-            pitch = np.degrees(np.arctan2(-rmat[2, 0], sy))
-            yaw = 0.0
-            roll = np.degrees(np.arctan2(-rmat[1, 2], rmat[1, 1]))
+            pitch = np.degrees(np.arctan2(-rmat[1, 2], rmat[1, 1]))
+            yaw = np.degrees(np.arctan2(-rmat[2, 0], sy))
+            roll = 0.0
 
         return float(pitch), float(yaw), float(roll)
     except Exception as e:
@@ -213,6 +221,67 @@ def _get_yunet_detector():
             except Exception as e:
                 logger.error(f"Failed to load YuNet detector: {e}")
     return _YUNET_DETECTOR
+
+
+_FACE_LANDMARKER = None
+
+
+def _get_face_landmarker():
+    """MediaPipe FaceLandmarker (478 points) — used for head-pose estimation
+    only. YuNet's 5-point landmarks + solvePnP proved unreliable for extreme
+    camera angles (e.g. phone held low, pointed steeply up at the chin): two
+    real photos of the same near-identical bad pose measured 22 degrees apart,
+    one of them landing inside the "acceptable" threshold. FaceLandmarker's
+    built-in facial transformation matrix, backed by many more constraint
+    points, reads the same two photos as -37 and -42 degrees pitch —
+    consistent with each other and clearly over any reasonable limit.
+    """
+    global _FACE_LANDMARKER
+    if _FACE_LANDMARKER is None and mp_vision is not None:
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "face_landmarker.task")
+        if os.path.exists(model_path):
+            try:
+                base_options = mp_python.BaseOptions(model_asset_path=model_path)
+                options = mp_vision.FaceLandmarkerOptions(
+                    base_options=base_options,
+                    output_face_blendshapes=False,
+                    output_facial_transformation_matrixes=True,
+                    num_faces=1,
+                )
+                _FACE_LANDMARKER = mp_vision.FaceLandmarker.create_from_options(options)
+                logger.info("Loaded MediaPipe FaceLandmarker (478-point) model successfully.")
+            except Exception as e:
+                logger.error(f"Failed to load MediaPipe FaceLandmarker: {e}")
+    return _FACE_LANDMARKER
+
+
+def _estimate_head_pose_mediapipe(image_rgb):
+    """Robust pitch/yaw/roll via MediaPipe FaceLandmarker's facial transformation
+    matrix. Returns (pitch, yaw, roll) in degrees, or None if unavailable/no face.
+    """
+    landmarker = _get_face_landmarker()
+    if landmarker is None:
+        return None
+    try:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        result = landmarker.detect(mp_image)
+        if not result.facial_transformation_matrixes:
+            return None
+        rmat = np.array(result.facial_transformation_matrixes[0])[:3, :3]
+        sy = np.sqrt(rmat[0, 0] ** 2 + rmat[1, 0] ** 2)
+        singular = sy < 1e-6
+        if not singular:
+            pitch = np.degrees(np.arctan2(rmat[2, 1], rmat[2, 2]))
+            yaw = np.degrees(np.arctan2(-rmat[2, 0], sy))
+            roll = np.degrees(np.arctan2(rmat[1, 0], rmat[0, 0]))
+        else:
+            pitch = np.degrees(np.arctan2(-rmat[1, 2], rmat[1, 1]))
+            yaw = np.degrees(np.arctan2(-rmat[2, 0], sy))
+            roll = 0.0
+        return float(pitch), float(yaw), float(roll)
+    except Exception as e:
+        logger.warning(f"MediaPipe head-pose estimation failed: {e}")
+        return None
 
 
 def validate_face_image(image, enable_rotation=False):
@@ -297,16 +366,23 @@ def validate_face_image(image, enable_rotation=False):
             if nose_x_ratio < 0.25 or nose_x_ratio > 0.75 or nose_y_ratio < 0.25 or nose_y_ratio > 0.75:
                 return False, "Face is off-center or partially outside the frame. Please center your face.", None
 
-            # Pitch/Yaw/Roll Check — real 3D head-pose via solvePnP, not a 2D distance ratio.
-            # This is far more resistant to landmark noise from facial hair, glasses, etc.,
-            # and catches the "camera held low, looking down at phone" pattern reliably —
-            # a common failure mode for elderly users who hold the phone at chest height.
+            # Pitch/Yaw/Roll Check. Primary source is MediaPipe FaceLandmarker's
+            # 478-point facial transformation matrix — far more robust than a
+            # 5-point solvePnP fit for extreme angles (verified: two real photos
+            # of the same "camera held low, pointed up" bad pose measured 22
+            # degrees apart under the old 5-point approach, one landing inside
+            # the acceptable range; FaceLandmarker reads both consistently at
+            # -37/-42 degrees). Falls back to the 5-point solvePnP estimate only
+            # if the FaceLandmarker model/dependency isn't available.
 
             # First: sanity-check the landmarks themselves before trusting pose math built on them.
             if not _landmark_plausibility_check(landmarks_x, landmarks_y):
                 return False, "Could not reliably read facial features. Please ensure your face is unobstructed and try again.", None
 
-            pose = _estimate_head_pose(landmarks_x, landmarks_y, w, h)
+            image_rgb_for_pose = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pose = _estimate_head_pose_mediapipe(image_rgb_for_pose)
+            if pose is None:
+                pose = _estimate_head_pose(landmarks_x, landmarks_y, w, h)
             if pose is not None:
                 pitch, yaw_deg, roll_deg = pose
 
@@ -315,7 +391,7 @@ def validate_face_image(image, enable_rotation=False):
                 MAX_ROLL_DEG = 15.0   # sideways head tilt
 
                 if abs(pitch) > MAX_PITCH_DEG:
-                    direction = "down" if pitch > 0 else "up"
+                    direction = "up" if pitch > 0 else "down"
                     return False, f"Head is tilted too far {direction}. Please hold the phone at eye level and look straight at the camera.", None
 
                 if abs(yaw_deg) > MAX_YAW_DEG:
@@ -324,7 +400,8 @@ def validate_face_image(image, enable_rotation=False):
                 if abs(roll_deg) > MAX_ROLL_DEG:
                     return False, "Head is tilted sideways. Please keep your head straight.", None
             else:
-                # solvePnP failed to converge — landmarks were too degenerate to trust.
+                # Neither MediaPipe nor the solvePnP fallback could produce a pose
+                # (model unavailable, or landmarks too degenerate to trust).
                 # Fail closed rather than silently skipping the pose check.
                 return False, "Could not determine face angle. Please hold steady facing the camera.", None
         bbox = face_box[:4].astype(int)
@@ -339,9 +416,20 @@ def validate_face_image(image, enable_rotation=False):
             bbox[1] + bbox[3] > h + bbox_tol):
             return False, "Face is too close to the edge of the frame. Please center your face.", None
 
-        # Face area coverage check (must cover at least 30% of the cropped image)
-        if (face_w * face_h) < (0.30 * w * h) or face_w < 40 or face_h < 40:
+        # Face area coverage check. This validator sees two very different shapes
+        # of input: a full, uncropped photo (registration) where the face is a
+        # small fraction of the frame, and an already tightly pre-cropped square
+        # (attendance punch) where the face fills nearly all of it — so the floor
+        # has to be low enough to admit both, not tuned to either one specifically.
+        if (face_w * face_h) < (0.04 * w * h) or face_w < 40 or face_h < 40:
             return False, "Face too small in frame. Please move closer.", None
+
+        # Extreme close-ups where the face outline is actually clipped are caught
+        # by the bbox_tol check above (the face box exceeding the frame bounds).
+        # A tighter percentage-based margin was tried here and removed: it can't
+        # distinguish a genuinely clipped registration photo from the punch
+        # flow's already tight, ~5%-padded pre-cropped image — both land in the
+        # same few-percent range, so it risked rejecting legitimate punch attempts.
 
         # Quality check on raw un-interpolated face crop (Tenengrad Sobel Gradient Focus Metric)
         crop_raw = image[face_y:face_y + face_h, face_x:face_x + face_w]
@@ -528,7 +616,7 @@ class FaceAttendance:
                         # if image is not None:
                         #     import time
                         #     import os
-                        #     debug_dir = "/home/ubuntu/facekit/facekit/scratch"
+                        #     debug_dir = os.path.join(os.path.dirname(BASE_DIR), "scratch")
                         #     os.makedirs(debug_dir, exist_ok=True)
                         #     debug_path = os.path.join(debug_dir, f"test_add_face_{int(time.time())}_{idx}.jpg")
                         #     cv2.imwrite(debug_path, image)

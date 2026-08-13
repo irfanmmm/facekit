@@ -4,6 +4,7 @@ pyjwt
 pymongo
 numpy
 opencv-python
+mediapipe
 faiss-cpu
 schedule
 Pillow
