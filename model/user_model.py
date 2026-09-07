@@ -85,6 +85,7 @@ class UserModel():
 
                 branch = editable_details.get('branch', None)
                 agency = editable_details.get('agency', None)
+                shift = editable_details.get('shift', user.get('shift'))
                 fullname = editable_details.get('full_name', None)
 
                 _filter = {
@@ -112,6 +113,7 @@ class UserModel():
                             "employee_code": user_id,
                             "branch": branch,
                             "agency": agency,
+                            "shift": shift,
                             "fullname": fullname
                         }
                 })
@@ -248,7 +250,7 @@ class UserModel():
 
         return {"data": all_results, "total": total_count, "limit": limit, "offset": offset}
 
-    def find_duplicate_faces(self, company_code: str, threshold: float = 0.40):
+    def find_duplicate_faces(self, company_code: str, threshold: float = 0.85):
         db = self.db
         collection = db[f'encodings_{company_code}']
 
@@ -273,7 +275,7 @@ class UserModel():
             enc = np.array(doc["encodings"],
                        dtype=np.float32).reshape(1, -1)
 
-            results = cache.search(enc,k=10, threshold=0.40)
+            results = cache.search(enc, k=10, threshold=threshold)
 
             for res in results:
                 matched_emp = res["employee"]["employee_code"]

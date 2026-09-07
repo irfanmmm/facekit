@@ -159,6 +159,33 @@ class ComponyModel():
             print(f"Error inserting agent: {str(e)}")
             return False
 
+    def _set_shift(self, compony_code, shift_name, start_time=None, end_time=None):
+        try:
+            self.db[f'shifts_{compony_code}'].create_index("shift_name", unique=True)
+            data = {
+                "compony_code": compony_code,
+                "shift_name": shift_name,
+                "start_time": start_time,
+                "end_time": end_time
+            }
+            self.db[f'shifts_{compony_code}'].insert_one(data)
+            return True
+        except DuplicateKeyError:
+            return False
+
+    def _get_shift(self, compony_code, search=None):
+        try:
+            office_kit_enabled = Settings.get_setting(compony_code, "Office Kit Integration")
+            if office_kit_enabled:
+                connect = OnboardingOfficekit(compony_code)
+                return connect.get_shift(search)
+            else:
+                # Fallback to local shifts
+                shifts = list(self.db[f'shifts_{compony_code}'].find({}, {"_id": 0}))
+                return shifts
+        except (KeyError, AttributeError):
+            return False
+
     def _generate_employee_code(self, compony_code):
         """Generate random unique employee code like EMP-1234"""
         db = self.db if self.db is not None else get_database(compony_code)

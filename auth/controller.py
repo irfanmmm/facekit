@@ -35,8 +35,6 @@ def verify_compony_code():
 
 
 """ individual user | admin login """
-
-
 @auth.route("/user-login", methods=['POST'])
 @jwt_required
 def login_user():
@@ -93,6 +91,7 @@ def add_user_in_admin():
         branch_found = False
         individual_login = False
         agency_management_enabled = False
+        shift_management_enabled = False
         for setting in branch_settings:
             if setting.get("setting_name") == "Branch Management":
                 value = setting.get("value", False)
@@ -113,6 +112,11 @@ def add_user_in_admin():
                 agency = data.get("agency")
                 if not agency and agency_management_enabled:
                     return jsonify({"message": "agency is requerd"}), 400
+            if setting.get("setting_name") == "Shift Management":
+                shift_management_enabled = setting.get("value", False)
+                shift = data.get("shift")
+                if not shift and shift_management_enabled:
+                    return jsonify({"message": "shift is requerd"}), 400
 
         db = get_database(user.get("compony_code"))
         compony_details = db[f'compony_details']
@@ -135,6 +139,9 @@ def add_user_in_admin():
 
         if agency_management_enabled:
             doc["agency"] = agency
+
+        if shift_management_enabled:
+            doc["shift"] = shift
 
         # Insert only once
         collection.insert_one(doc)

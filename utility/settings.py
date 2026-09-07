@@ -12,6 +12,7 @@ class Settings:
         "Individual Login": False,
         "Branch Management": False,
         "Agency Management": False,
+        "Shift Management": False,
         "Office Kit Integration": False,
         "List Employees": False,
         "Enable Create User":False,

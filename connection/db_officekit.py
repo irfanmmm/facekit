@@ -25,15 +25,27 @@ host = os.getenv("OFFICEKIT_HOST")
 # thread.
 _thread_local = threading.local()
 
+# Companies with a real OfficeKit database wired up below. Any other company_code
+# must get no connection at all — previously an unrecognized code silently fell
+# through to the default (myG) credentials, which meant other companies' branch/
+# agency lookups were served from myG's database instead of failing cleanly.
+# A101 and A102 are both "Empire" and share the same OfficeKit database — verified
+# live (A101's stored branch/agency IDs resolve to real Empire branch names there).
+_KNOWN_OFFICEKIT_COMPANIES = {None, 'A100', 'A101', 'A102', 'A860'}
+_EMPIRE_COMPANIES = {'A101', 'A102'}
+
 
 def get_db(company_code=None):
+    if company_code not in _KNOWN_OFFICEKIT_COMPANIES:
+        return None
+
     current_host = host
     current_server = os.getenv("OFFICEKIT_SERVER") or server
     current_user = username
     current_pass = password
     current_db = database
 
-    if company_code and company_code == 'A102':
+    if company_code in _EMPIRE_COMPANIES:
         current_db = os.getenv("EMPIRE_OFFICEKIT_DATABASE_NAME")
         current_host = os.getenv("EMPIRE_OFFICEKIT_IP")
         current_user = os.getenv("EMPIRE_OFFICEKIT_USER")

@@ -5,8 +5,43 @@ import fcntl
 import contextlib
 import threading
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 _global_thread_lock = threading.Lock()
+
+# Bounded pool for OfficeKit background sync (onboarding + punch-in/out).
+# These used to spawn a brand-new raw thread per event with no cap — under a
+# real simultaneous punch-in burst that's an unbounded number of concurrent
+# threads all hitting the external OfficeKit SQL Server, and each one-shot
+# thread also opened its own fresh pymssql connection since thread-local
+# connection reuse only helps threads that stick around. A small fixed pool
+# bounds concurrency and lets worker threads actually reuse their cached
+# connection across many events.
+_OFFICEKIT_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="officekit-bg")
+
+# Attendance collections (one per company per month) had no index beyond the
+# default _id — every single punch's find_one({employee_id, date range}) was
+# a full collection scan, and some months already hold 7,000+ documents. A
+# fresh collection gets created every month with no index unless something
+# creates one, so this ensures it lazily, once per collection name per worker
+# process — create_index is idempotent, so calling it again on a
+# already-indexed collection (e.g. after a restart) is a fast no-op.
+_indexed_attendance_collections = set()
+_index_ensure_lock = threading.Lock()
+
+
+def _ensure_attendance_index(collection):
+    name = collection.full_name
+    if name in _indexed_attendance_collections:
+        return
+    with _index_ensure_lock:
+        if name in _indexed_attendance_collections:
+            return
+        try:
+            collection.create_index([("employee_id", 1), ("date", 1)])
+        except Exception as e:
+            logger.warning(f"Failed to ensure attendance index on {name}: {e}")
+        _indexed_attendance_collections.add(name)
 
 @contextlib.contextmanager
 def process_lock(lock_path):
@@ -17,6 +52,55 @@ def process_lock(lock_path):
                 yield
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
+
+# Bounds concurrent CPU-heavy face processing (YuNet detection, MediaPipe pose
+# estimation, SFace embedding) to CPU_SLOT_COUNT across ALL gunicorn worker
+# PROCESSES combined - confirmed by direct observation that a single one of
+# these calls can peg an entire core on this server's 2 vCPUs. gunicorn runs
+# with preload_app=False (native libs aren't fork-safe), so each worker
+# imports this module independently after forking - an in-process
+# threading/multiprocessing semaphore created here would only be shared
+# within one worker, not across all 3. File-based advisory locks (fcntl) work
+# across any unrelated processes, so a small fixed pool of lock files acts as
+# a real cross-process counting semaphore: without this, gthread's thread
+# pool (3 workers x 2 threads = 6 slots) let up to 6 CPU-bound jobs start at
+# once on just 2 cores, thrashing every one of them instead of letting early
+# arrivals finish fast and only genuine bursts queue briefly.
+CPU_SLOT_COUNT = 2
+_CPU_SLOT_PATHS = [f"/tmp/facekit_cpu_slot_{i}.lock" for i in range(CPU_SLOT_COUNT)]
+
+
+@contextlib.contextmanager
+def cpu_slot(timeout=8.0, poll_interval=0.02):
+    deadline = time.monotonic() + timeout
+    fd = None
+    try:
+        while fd is None:
+            for path in _CPU_SLOT_PATHS:
+                candidate_fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+                try:
+                    fcntl.flock(candidate_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fd = candidate_fd
+                    break
+                except BlockingIOError:
+                    os.close(candidate_fd)
+            if fd is not None:
+                break
+            if time.monotonic() >= deadline:
+                # Fail open rather than reject a legitimate scan outright if
+                # every slot stays busy past the timeout (or something's
+                # wrong with the locking itself) - degraded performance under
+                # a genuine overload is far better than a hard failure here.
+                logger.warning("cpu_slot: timed out waiting for a free slot, proceeding without one")
+                break
+            time.sleep(poll_interval)
+        yield
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 import numpy as np
 try:
@@ -284,7 +368,7 @@ def _estimate_head_pose_mediapipe(image_rgb):
         return None
 
 
-def validate_face_image(image, enable_rotation=False):
+def validate_face_image(image, enable_rotation=False, check_pose=True):
     """
     Validates face quality and extracts 128-d SFace embedding vector.
     Expects BGR image format from OpenCV imdecode/imread.
@@ -305,39 +389,43 @@ def validate_face_image(image, enable_rotation=False):
     sface = _get_sface_recognizer()
 
     if detector is not None and sface is not None:
-        detector.setInputSize((w, h))
-        _, faces = detector.detect(image)
+        # Detection (incl. the rotation-fallback retries below) is one of the
+        # CPU-heaviest steps in this function - see cpu_slot's definition for
+        # why this needs a cross-process slot rather than an in-process lock.
+        with cpu_slot():
+            detector.setInputSize((w, h))
+            _, faces = detector.detect(image)
 
-        # Check if we need rotation fallback (no faces or low confidence)
-        needs_rotation = True
-        if faces is not None and len(faces) > 0:
-            max_conf = max([float(f[14]) if len(f) > 14 else 1.0 for f in faces])
-            if max_conf >= 0.20:
-                needs_rotation = False
+            # Check if we need rotation fallback (no faces or low confidence)
+            needs_rotation = True
+            if faces is not None and len(faces) > 0:
+                max_conf = max([float(f[14]) if len(f) > 14 else 1.0 for f in faces])
+                if max_conf >= 0.20:
+                    needs_rotation = False
 
-        if needs_rotation and enable_rotation:
-            # Auto-rotate fallback for mobile images sent sideways (90° CW, 90° CCW, 180°)
-            best_rot_faces = None
-            best_rot_img = None
-            best_conf = 0.0
+            if needs_rotation and enable_rotation:
+                # Auto-rotate fallback for mobile images sent sideways (90° CW, 90° CCW, 180°)
+                best_rot_faces = None
+                best_rot_img = None
+                best_conf = 0.0
 
-            for rot_flag in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
-                rot_img = cv2.rotate(image, rot_flag)
-                rh, rw = rot_img.shape[:2]
-                detector.setInputSize((rw, rh))
-                _, rfaces = detector.detect(rot_img)
-                if rfaces is not None and len(rfaces) > 0:
-                    r_conf = max([float(f[14]) if len(f) > 14 else 1.0 for f in rfaces])
-                    if r_conf > best_conf:
-                        best_conf = r_conf
-                        best_rot_faces = rfaces
-                        best_rot_img = rot_img
-                        h, w = rh, rw
-            
-            if best_rot_faces is not None and best_conf >= 0.20:
-                logger.info(f"🔄 Auto-rotated image for better face detection (conf: {best_conf:.2f}).")
-                image = best_rot_img
-                faces = best_rot_faces
+                for rot_flag in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
+                    rot_img = cv2.rotate(image, rot_flag)
+                    rh, rw = rot_img.shape[:2]
+                    detector.setInputSize((rw, rh))
+                    _, rfaces = detector.detect(rot_img)
+                    if rfaces is not None and len(rfaces) > 0:
+                        r_conf = max([float(f[14]) if len(f) > 14 else 1.0 for f in rfaces])
+                        if r_conf > best_conf:
+                            best_conf = r_conf
+                            best_rot_faces = rfaces
+                            best_rot_img = rot_img
+                            h, w = rh, rw
+
+                if best_rot_faces is not None and best_conf >= 0.20:
+                    logger.info(f"🔄 Auto-rotated image for better face detection (conf: {best_conf:.2f}).")
+                    image = best_rot_img
+                    faces = best_rot_faces
 
         if faces is None or len(faces) == 0:
             return False, "No clear face detected. Please hold steady facing the camera.", None
@@ -374,36 +462,46 @@ def validate_face_image(image, enable_rotation=False):
             # the acceptable range; FaceLandmarker reads both consistently at
             # -37/-42 degrees). Falls back to the 5-point solvePnP estimate only
             # if the FaceLandmarker model/dependency isn't available.
+            #
+            # check_pose=False (used by compare_faces/attendance punch) skips this
+            # entire block: MediaPipe inference is the single most CPU-expensive
+            # step in this function, and on this server's 2 vCPUs a single call
+            # can peg an entire core for its duration. Pose/angle quality only
+            # matters at registration time (update_face keeps check_pose=True);
+            # by punch time the embedding is already known-good, so paying that
+            # cost again on every attendance scan just adds latency without
+            # improving match accuracy.
+            if check_pose:
+                # First: sanity-check the landmarks themselves before trusting pose math built on them.
+                if not _landmark_plausibility_check(landmarks_x, landmarks_y):
+                    return False, "Could not reliably read facial features. Please ensure your face is unobstructed and try again.", None
 
-            # First: sanity-check the landmarks themselves before trusting pose math built on them.
-            if not _landmark_plausibility_check(landmarks_x, landmarks_y):
-                return False, "Could not reliably read facial features. Please ensure your face is unobstructed and try again.", None
+                with cpu_slot():
+                    image_rgb_for_pose = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    pose = _estimate_head_pose_mediapipe(image_rgb_for_pose)
+                    if pose is None:
+                        pose = _estimate_head_pose(landmarks_x, landmarks_y, w, h)
+                if pose is not None:
+                    pitch, yaw_deg, roll_deg = pose
 
-            image_rgb_for_pose = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            pose = _estimate_head_pose_mediapipe(image_rgb_for_pose)
-            if pose is None:
-                pose = _estimate_head_pose(landmarks_x, landmarks_y, w, h)
-            if pose is not None:
-                pitch, yaw_deg, roll_deg = pose
+                    MAX_PITCH_DEG = 15.0  # up/down tilt — tune after testing real bad-angle samples
+                    MAX_YAW_DEG = 20.0    # left/right turn
+                    MAX_ROLL_DEG = 15.0   # sideways head tilt
 
-                MAX_PITCH_DEG = 15.0  # up/down tilt — tune after testing real bad-angle samples
-                MAX_YAW_DEG = 20.0    # left/right turn
-                MAX_ROLL_DEG = 15.0   # sideways head tilt
+                    if abs(pitch) > MAX_PITCH_DEG:
+                        direction = "up" if pitch > 0 else "down"
+                        return False, f"Head is tilted too far {direction}. Please hold the phone at eye level and look straight at the camera.", None
 
-                if abs(pitch) > MAX_PITCH_DEG:
-                    direction = "up" if pitch > 0 else "down"
-                    return False, f"Head is tilted too far {direction}. Please hold the phone at eye level and look straight at the camera.", None
+                    if abs(yaw_deg) > MAX_YAW_DEG:
+                        return False, "Face is turned to the side. Please look straight at the camera.", None
 
-                if abs(yaw_deg) > MAX_YAW_DEG:
-                    return False, "Face is turned to the side. Please look straight at the camera.", None
-
-                if abs(roll_deg) > MAX_ROLL_DEG:
-                    return False, "Head is tilted sideways. Please keep your head straight.", None
-            else:
-                # Neither MediaPipe nor the solvePnP fallback could produce a pose
-                # (model unavailable, or landmarks too degenerate to trust).
-                # Fail closed rather than silently skipping the pose check.
-                return False, "Could not determine face angle. Please hold steady facing the camera.", None
+                    if abs(roll_deg) > MAX_ROLL_DEG:
+                        return False, "Head is tilted sideways. Please keep your head straight.", None
+                else:
+                    # Neither MediaPipe nor the solvePnP fallback could produce a pose
+                    # (model unavailable, or landmarks too degenerate to trust).
+                    # Fail closed rather than silently skipping the pose check.
+                    return False, "Could not determine face angle. Please hold steady facing the camera.", None
         bbox = face_box[:4].astype(int)
         face_x, face_y, face_w, face_h = max(0, bbox[0]), max(0, bbox[1]), bbox[2], bbox[3]
 
@@ -459,7 +557,8 @@ def validate_face_image(image, enable_rotation=False):
         if avg_eye_std < 5.0:
             return False, "No clear facial features (eyes) detected. Please face the camera.", None
 
-        feat = sface.feature(aligned_face)
+        with cpu_slot():
+            feat = sface.feature(aligned_face)
         norm = np.linalg.norm(feat)
         if norm > 0:
             feat = feat / norm
@@ -498,6 +597,19 @@ def _get_local_branch_cached(company_code, branch_name):
     })
 
 
+@lru_cache(maxsize=128)
+def _get_officekit_branch_cached(company_code, branch_name):
+    # retreve_codinates() has its own @lru_cache, but it's an instance method
+    # and compare_faces() creates a fresh OfficeKitPunching(company_code) on
+    # every call, so that cache is keyed on a different `self` each time and
+    # never hits. This module-level cache, keyed on (company_code,
+    # branch_name) only, is what actually avoids the synchronous SQL round
+    # trip to the external OfficeKit server on repeat punches for the same
+    # branch.
+    off = OfficeKitPunching(company_code)
+    return off.retreve_codinates(branch_name)
+
+
 class FaceAttendance:
     def __init__(self):
         pass
@@ -528,7 +640,7 @@ class FaceAttendance:
                     # except Exception as save_err:
                     #     print(f"Debug save error: {save_err}")
 
-                    ok, message, encodings = validate_face_image(image)
+                    ok, message, encodings = validate_face_image(image, check_pose=False)
                     if ok and encodings:
                         current_encoding = encodings[0]
                     else:
@@ -572,8 +684,8 @@ class FaceAttendance:
             if Settings.get_setting(company_code, "Location Tracking"):
                 if branch_name:
                     if officekit_user:
-                        off = OfficeKitPunching(company_code)
-                        branch = off.retreve_codinates(branch_name)
+                        branch = _get_officekit_branch_cached(
+                            company_code, branch_name)
                     else:
                         branch = _get_local_branch_cached(
                             company_code, branch_name)
@@ -593,7 +705,7 @@ class FaceAttendance:
             traceback.print_exc()
             return False, "System error"
 
-    def update_face(self, branch, agency, add_images=None, company_code=None, fullname=None, gender=None, existing_office_kit_user=False, employeecode=None, add_img=None, client_embeddings=None, client_embedding=None):
+    def update_face(self, branch, agency, add_images=None, company_code=None, fullname=None, gender=None, existing_office_kit_user=False, employeecode=None, add_img=None, client_embeddings=None, client_embedding=None, shift=None):
         try:
             current_encodings = []
             primary_image = None
@@ -693,8 +805,8 @@ class FaceAttendance:
                     cv2.imwrite(filepath, primary_image)
 
                 # Duplicate check against every pose (SFace 128-d space)
-                # Adjusted threshold to 1.05 to balance catching true duplicates without false positives
-                DUPLICATE_CHECK_THRESHOLD = 1.05
+                # Aligned threshold to 0.85 to match recognition MAX_ALLOWED_DISTANCE
+                DUPLICATE_CHECK_THRESHOLD = 0.85
                 cashe = FaceIndexManager(company_code)
 
 
@@ -721,6 +833,7 @@ class FaceAttendance:
                     "employee_code": employee_code,
                     "branch": branch,
                     "agency": agency,
+                    "shift": shift,
                     "fullname": fullname,
                     "existing_user_officekit": existing_office_kit_user,
                     "encodings": current_encodings,
@@ -739,19 +852,19 @@ class FaceAttendance:
                     "employee_code": employee_code,
                     "branch": branch,
                     "agency": agency,
+                    "shift": shift,
                     "fullname": fullname,
                     "existing_user_officekit": existing_office_kit_user
                 })
 
             if Settings.get_setting(company_code, "Office Kit Onboarding"):
-                import threading
                 def _bg_onboard():
                     try:
                         add_user = OnboardingOfficekit(company_code)
-                        add_user.add_user(employee_code, branch, agency, company_code, fullname, gender)
+                        add_user.add_user(employee_code, branch, agency, company_code, fullname, gender, shift=shift)
                     except Exception as ex:
                         logger.error(f"OfficeKit Onboarding error: {ex}")
-                threading.Thread(target=_bg_onboard).start()
+                _OFFICEKIT_EXECUTOR.submit(_bg_onboard)
 
             return True, "success"
 
@@ -856,6 +969,7 @@ class FaceAttendance:
         tomorrow_start = today_start + timedelta(days=1)
         collection_name = f"attandance_{company_code}_{now.strftime('%Y-%m')}"
         collection = db[collection_name]
+        _ensure_attendance_index(collection)
 
         filter_query = {
             "employee_id": employee["employee_code"],
@@ -950,7 +1064,6 @@ class FaceAttendance:
             duration_str = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
 
         if officekit_user:
-            import threading
             def _bg_punch(dir_val, emp_code, comp_code):
                 try:
                     punching = OfficeKitPunching(comp_code)
@@ -958,8 +1071,7 @@ class FaceAttendance:
                 except Exception as e:
                     logger.error(f"Background Punching Error: {e}")
 
-            t = threading.Thread(target=_bg_punch, args=(direction, employee["employee_code"], company_code), daemon=True)
-            t.start()
+            _OFFICEKIT_EXECUTOR.submit(_bg_punch, direction, employee["employee_code"], company_code)
 
 
         return True, {

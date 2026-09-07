@@ -135,7 +135,8 @@ def fech_client_details(compony_code, limit=10, offset=0, date=None):
         except Exception as e:
             print(f"Error fetching attendance: {e}")
 
-    query = {"is_delete": {"$ne": True}}
+    # query = {"is_delete": {"$ne": True}}
+    query = {}
 
     if date:
         query["employee_code"] = {
@@ -275,6 +276,24 @@ def fech_client_details(compony_code, limit=10, offset=0, date=None):
 
             emp["agency"] = agency_cache[agency_key]
 
+        # ------------------------------
+        # Fallback: if still unresolved (missing, or a raw ID a prior lookup
+        # above couldn't resolve), pull the employee's real branch/agency
+        # straight from OfficeKit via their entity assignment.
+        # ------------------------------
+        branch_unresolved = _is_unresolved(emp.get("branch"))
+        agency_unresolved = _is_unresolved(emp.get("agency"))
+        if (branch_unresolved or agency_unresolved) and office_kit.conn and emp.get("employee_code"):
+            try:
+                org = office_kit.get_employee_org(emp.get("employee_code"))
+            except Exception:
+                org = None
+            if org:
+                if branch_unresolved and org.get("BranchName"):
+                    emp["branch"] = org["BranchName"]
+                if agency_unresolved and org.get("AgencyName"):
+                    emp["agency"] = org["AgencyName"]
+
     return {
         "data": emp_details,
         "total": total_count,
@@ -374,9 +393,10 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
     
     emp_details = list(cursor)
     office_kit = OnboardingOfficekit(compony_code)
-    
+
     branch_cache = {}
-    
+    agency_cache = {}
+
     # Pre-fetch images mapping for search results
     image_map = {}
     try:
@@ -418,6 +438,36 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
                     branch_cache[branch_key] = branch
             emp['branch'] = branch_cache[branch_key]
 
+        emp_agency = emp.get('agency')
+        if emp_agency and (isinstance(emp_agency, int) or re.match(r'^\d+$', str(emp_agency))):
+            agency_key = str(emp_agency)
+            if agency_key not in agency_cache:
+                try:
+                    agency_data = office_kit.get_agency(emp_agency)
+                    if agency_data:
+                        agency_cache[agency_key] = agency_data[0]['agent_name']
+                    else:
+                        agency_cache[agency_key] = emp_agency
+                except Exception:
+                    agency_cache[agency_key] = emp_agency
+            emp['agency'] = agency_cache[agency_key]
+
+        # Fallback: if still unresolved (missing, or a raw ID the lookups
+        # above couldn't resolve), pull the employee's real branch/agency
+        # straight from OfficeKit via their entity assignment.
+        branch_unresolved = _is_unresolved(emp.get("branch"))
+        agency_unresolved = _is_unresolved(emp.get("agency"))
+        if (branch_unresolved or agency_unresolved) and office_kit.conn and emp.get("employee_code"):
+            try:
+                org = office_kit.get_employee_org(emp.get("employee_code"))
+            except Exception:
+                org = None
+            if org:
+                if branch_unresolved and org.get("BranchName"):
+                    emp["branch"] = org["BranchName"]
+                if agency_unresolved and org.get("AgencyName"):
+                    emp["agency"] = org["AgencyName"]
+
     return {
         "data": emp_details,
         "total": total_count,
@@ -425,6 +475,182 @@ def fech_client_details_search(compony_code, search, limit=10, offset=0, date=No
         "offset": offset,
         "search": search
     }
+
+
+def set_portal_credentials(compony_code, admin_username, admin_password):
+    """Set/reset the dedicated admin-portal login for one company (separate from their app login)."""
+    client = get_database()
+    for db_name in client.list_database_names():
+        if db_name in exclude or db_name == compony_code:
+            continue
+        existing = client[db_name].get_collection("compony_details").find_one(
+            {"admin_username": admin_username}
+        )
+        if existing:
+            return {"error": "That admin_username is already taken by another company"}
+
+    db = get_database(compony_code)
+    collection = db.get_collection("compony_details")
+    result = collection.update_one(
+        {"compony_code": str(compony_code)},
+        {"$set": {"admin_username": admin_username, "admin_password": admin_password}}
+    )
+    if result.matched_count == 0:
+        return {"error": "Company not found"}
+    return {"message": "success"}
+
+
+def _is_unresolved(value):
+    """True if a branch/agency value is missing, or is still a raw numeric ID
+    that a prior OfficeKit lookup failed to resolve to a name."""
+    if not value:
+        return True
+    return isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+
+
+def _delete_employee_from_officekit(compony_code, employee_code):
+    """Best-effort hard delete of an employee from every Officekit table
+    add_user() ever inserts into (children before parents, reverse insert
+    order), plus attendance staging. Silently no-ops if this company has no
+    Officekit connection configured."""
+    from connection.officekit_onboarding import OnboardingOfficekit
+
+    office_kit = OnboardingOfficekit(compony_code)
+    if not office_kit.conn:
+        return
+
+    try:
+        cursor = office_kit.conn.cursor(as_dict=True)
+
+        cursor.execute("SELECT Emp_ID FROM HR_EMP_MASTER WHERE Emp_Code = %s", (employee_code,))
+        emp_row = cursor.fetchone()
+        emp_id = emp_row["Emp_ID"] if emp_row else None
+
+        cursor.execute("SELECT UserID FROM ADM_User_Master WHERE UserName = %s", (employee_code,))
+        user_row = cursor.fetchone()
+        user_id = user_row["UserID"] if user_row else None
+
+        cursor.execute("DELETE FROM ATTENDANCELOG_STAGING WHERE UserId = %s", (employee_code,))
+
+        if emp_id is not None:
+            cursor.execute("DELETE FROM SHIFT_MASTER_ACCESS WHERE EmployeeID = %s", (emp_id,))
+            cursor.execute("DELETE FROM ATTENDANCEPOLICY_MASTER_ACCESS WHERE EmployeeID = %s", (emp_id,))
+            cursor.execute("DELETE FROM BIOMETRICS_DTL WHERE EmployeeID = %s", (emp_id,))
+            cursor.execute("DELETE FROM HR_EMP_ADDRESS WHERE Emp_Id = %s", (emp_id,))
+            cursor.execute("DELETE FROM HR_EMP_IMAGES WHERE emp_id = %s", (emp_id,))
+            cursor.execute("DELETE FROM HR_EMPLOYEE_USER_RELATION WHERE Emp_Id = %s", (emp_id,))
+
+        if user_id is not None:
+            cursor.execute("DELETE FROM ADM_UserRoleMaster WHERE User_Id = %s", (user_id,))
+            cursor.execute("DELETE FROM ADM_User_Master WHERE UserID = %s", (user_id,))
+
+        cursor.execute("DELETE FROM HR_EMP_MASTER WHERE Emp_Code = %s", (employee_code,))
+
+        office_kit.conn.commit()
+    except Exception as e:
+        office_kit.conn.rollback()
+        print(f"OfficeKit deletion failed for {employee_code} ({compony_code}): {e}")
+
+
+def force_delete_employee(compony_code, employee_code):
+    if not compony_code or not employee_code:
+        return {"error": "compony_code and employee_code are required"}
+
+    db = get_database(compony_code)
+    collection = db.get_collection(f"encodings_{compony_code}")
+
+    result = collection.delete_one({"employee_code": employee_code})
+    if result.deleted_count == 0:
+        return {"error": "Employee not found"}
+
+    _delete_employee_from_officekit(compony_code, employee_code)
+
+    from face_match.faiss_manager import FaceIndexManager
+    FaceIndexManager(compony_code).rebuild_index()
+
+    return {"message": "success"}
+
+
+def delete_employee_facekit_only(compony_code, employee_code):
+    """Delete an employee from Facekit's own database only - Officekit (if
+    this company has it wired up) is left untouched. See force_delete_employee
+    for the variant that also removes the employee from Officekit."""
+    if not compony_code or not employee_code:
+        return {"error": "compony_code and employee_code are required"}
+
+    db = get_database(compony_code)
+    collection = db.get_collection(f"encodings_{compony_code}")
+
+    result = collection.delete_one({"employee_code": employee_code})
+    if result.deleted_count == 0:
+        return {"error": "Employee not found"}
+
+    from face_match.faiss_manager import FaceIndexManager
+    FaceIndexManager(compony_code).rebuild_index()
+
+    return {"message": "success"}
+
+
+def switch_employee_branch(compony_code, employee_code, branch_id):
+    """Change an employee's branch. Always updates the local Mongo record;
+    if this company has Officekit integration turned on, also moves the
+    employee to the matching org-entity in Officekit first, so both sides
+    end up pointing at the same branch (and Mongo's `branch` value ends up as
+    Officekit's resolved id, not just whatever the caller passed in)."""
+    if not compony_code or not employee_code or branch_id is None:
+        return {"error": "compony_code, employee_code and branch_id are required"}
+
+    db = get_database(compony_code)
+    collection = db.get_collection(f"encodings_{compony_code}")
+    if not collection.find_one({"employee_code": employee_code}):
+        return {"error": "Employee not found"}
+
+    officekit_result = None
+    if Settings.get_setting(compony_code, "Office Kit Integration"):
+        office_kit = OnboardingOfficekit(compony_code)
+        if office_kit.conn:
+            try:
+                officekit_result = office_kit.switch_branch(employee_code, branch_id)
+            except Exception as e:
+                return {"error": f"Officekit branch switch failed: {e}"}
+
+    mongo_branch_value = officekit_result["branch_id"] if officekit_result else branch_id
+    collection.update_one(
+        {"employee_code": employee_code},
+        {"$set": {"branch": mongo_branch_value}}
+    )
+
+    return {"message": "success", "officekit": officekit_result}
+
+
+def switch_employee_agency(compony_code, employee_code, agency_id):
+    """Change an employee's agency, same pattern as switch_employee_branch -
+    Officekit first (if integrated), then Mongo reflects whatever Officekit
+    resolved."""
+    if not compony_code or not employee_code or agency_id is None:
+        return {"error": "compony_code, employee_code and agency_id are required"}
+
+    db = get_database(compony_code)
+    collection = db.get_collection(f"encodings_{compony_code}")
+    if not collection.find_one({"employee_code": employee_code}):
+        return {"error": "Employee not found"}
+
+    officekit_result = None
+    if Settings.get_setting(compony_code, "Office Kit Integration"):
+        office_kit = OnboardingOfficekit(compony_code)
+        if office_kit.conn:
+            try:
+                officekit_result = office_kit.switch_agency(employee_code, agency_id)
+            except Exception as e:
+                return {"error": f"Officekit agency switch failed: {e}"}
+
+    mongo_agency_value = officekit_result["agency_name"] if officekit_result else agency_id
+    collection.update_one(
+        {"employee_code": employee_code},
+        {"$set": {"agency": mongo_agency_value}}
+    )
+
+    return {"message": "success", "officekit": officekit_result}
 
 
 def create_company(data):

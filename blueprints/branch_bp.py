@@ -93,3 +93,45 @@ def set_branches():
     if agencys:
         return jsonify({"message": "success"})
     return jsonify({"message": "Failed"})
+
+
+@branch_bp.route("/add-shift", methods=['POST'])
+@jwt_required
+def add_shift():
+    user = request.user
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No JSON body received"}), 400
+    shift_name = data.get('shift_name')
+    if not shift_name:
+        return jsonify({"message": "shift_name is requerd"})
+    compony_code = user.get('compony_code')
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+    start_time = data.get('start_time')
+    end_time = data.get('end_time')
+
+    componyCode = ComponyModel(compony_code)
+    status = componyCode._set_shift(
+        compony_code, shift_name, start_time, end_time)
+    if status:
+        return jsonify({"message": "success"})
+    return jsonify({"message": "Failed"})
+
+
+@branch_bp.route("/get-shift", methods=['POST'])
+@jwt_required
+def get_shifts():
+    user = request.user
+    compony_code = user.get('compony_code')
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"})
+
+    data = request.get_json() or {}
+    search = data.get('search')
+
+    componyCode = ComponyModel(compony_code)
+    shifts = componyCode._get_shift(compony_code, search)
+    if isinstance(shifts, list):
+        return jsonify({"message": "success", "details": shifts})
+    return jsonify({"message": "Failed"})

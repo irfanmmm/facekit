@@ -38,15 +38,19 @@ def add_employee_face():
         return jsonify({"message": "No JSON body received"}), 400
 
 
-    sm = Settings(compony_code)
-    branch_requerd = sm.get("Branch Management")
-    agency_requerd = sm.get("Agency Management")
-    office_kit_user = sm.get("Office Kit Integration")
-    employeecode_requerd = sm.get("Employee Code")
-    
+    # Uses Settings.get_setting() (process-cached) instead of a fresh Settings()
+    # instance — the instance path re-queries the settings collection from Mongo
+    # on every single call since its cache never survives past one request.
+    branch_requerd = Settings.get_setting(compony_code, "Branch Management")
+    agency_requerd = Settings.get_setting(compony_code, "Agency Management")
+    office_kit_user = Settings.get_setting(compony_code, "Office Kit Integration")
+    employeecode_requerd = Settings.get_setting(compony_code, "Employee Code")
+    shift_requerd = Settings.get_setting(compony_code, "Shift Management")
+
     branch = data.get('branch')
     agency = data.get('agency')
     employeecode = data.get('employeecode')
+    shift = data.get('shift')
 
 
     # Base required fields - require images array or single base64 image
@@ -54,7 +58,7 @@ def add_employee_face():
     if not data.get('images'):
         required_fields.append("base64")
 
-    
+
     # Dynamic required fields based on settings
     if branch_requerd:
         required_fields.append("branch")
@@ -62,6 +66,8 @@ def add_employee_face():
         required_fields.append("agency")
     if employeecode_requerd:
         required_fields.append("employeecode")
+    if shift_requerd:
+        required_fields.append("shift")
 
     missing_fields = [field for field in required_fields if not data.get(field)]
     
@@ -88,6 +94,7 @@ def add_employee_face():
         existing_office_kit_user=office_kit_user,
         employeecode=employeecode,
         client_embeddings=client_embeddings,
+        shift=shift,
     )
 
 
@@ -108,10 +115,12 @@ def comare_face():
             "error": "JSON body error"
         }), 400
 
-    sm = Settings(user.get("compony_code"))
-    location_settings = sm.get("Location Tracking")
-    individual_login = sm.get("Individual Login")
-    officekit_user = sm.get("Office Kit Integration")
+    # Cached (see add_employee_face for why) — this route runs on every
+    # single attendance punch, so the saved Mongo round-trip matters most here.
+    compony_code = user.get("compony_code")
+    location_settings = Settings.get_setting(compony_code, "Location Tracking")
+    individual_login = Settings.get_setting(compony_code, "Individual Login")
+    officekit_user = Settings.get_setting(compony_code, "Office Kit Integration")
 
     latitude = 0
     longitude = 0
@@ -135,7 +144,7 @@ def comare_face():
 
     success, result = attendance.compare_faces(
         base_img=base64,
-        company_code=user.get("compony_code"),
+        company_code=compony_code,
         latitude=latitude,
         longitude=longitude,
         officekit_user=officekit_user,
