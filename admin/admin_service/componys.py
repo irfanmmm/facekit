@@ -591,6 +591,52 @@ def delete_employee_facekit_only(compony_code, employee_code):
     return {"message": "success"}
 
 
+def list_branches(compony_code, search=None, offset=1, limit=1000):
+    """Admin-scoped branch listing - same dual-source logic as branch_bp's
+    /get-branch (live Officekit if this company is integrated, else the
+    locally-added `branch_{compony_code}` collection), but keyed off an
+    explicit compony_code since an admin session isn't locked to one
+    company. Local branches have no numeric id of their own, so their name
+    doubles as the id (matches how they're already looked up/stored)."""
+    if not compony_code:
+        return {"error": "compony_code is required"}
+
+    compony_model = ComponyModel(compony_code)
+    branches = compony_model._get_branch(compony_code, offset, limit, search)
+
+    if isinstance(branches, dict) and "data" in branches:
+        return {"data": [{"_id": b["_id"], "name": b["branch_name"]} for b in branches["data"]]}
+    if isinstance(branches, list):
+        names = [b["branch_name"] for b in branches if b.get("branch_name")]
+        if search:
+            names = [n for n in names if search.lower() in n.lower()]
+        return {"data": [{"_id": n, "name": n} for n in names]}
+
+    return {"error": "Failed to fetch branches"}
+
+
+def list_agencies(compony_code, branch_id=None, search=None):
+    """Admin-scoped agency listing, same pattern as list_branches."""
+    if not compony_code:
+        return {"error": "compony_code is required"}
+
+    compony_model = ComponyModel(compony_code)
+    agencies = compony_model._get_agents(compony_code, branch_id)
+
+    if isinstance(agencies, list):
+        result = []
+        for a in agencies:
+            if "_id" in a and "agent_name" in a:
+                result.append({"_id": a["_id"], "name": a["agent_name"]})
+            elif "agent_name" in a:
+                result.append({"_id": a["agent_name"], "name": a["agent_name"]})
+        if search:
+            result = [a for a in result if search.lower() in a["name"].lower()]
+        return {"data": result}
+
+    return {"error": "Failed to fetch agencies"}
+
+
 def switch_employee_branch(compony_code, employee_code, branch_id):
     """Change an employee's branch. Always updates the local Mongo record;
     if this company has Officekit integration turned on, also moves the

@@ -325,52 +325,69 @@ class OnboardingOfficekit:
         entity["Emp_ID"] = emp["Emp_ID"]
         return entity
 
+    @staticmethod
+    def _normalize_org_name(name):
+        """Officekit's own org-entity descriptions aren't spelled consistently
+        across branches for what is clearly the same agency (confirmed live:
+        one branch has 'CLEAN & WELL', another has 'CLEAN AND WELL' for what
+        is otherwise identical org data) - normalize '&' to 'AND' and collapse
+        whitespace/case before comparing names, instead of relying on exact
+        string equality that a spelling variant would silently fail."""
+        if not name:
+            return ""
+        name = name.upper().strip()
+        name = re.sub(r"\s*&\s*", " AND ", name)
+        return re.sub(r"\s+", " ", name).strip()
+
     def _resolve_entity(self, level_four_id=None, level_five_id=None, level_five_desc=None,
                          level_six_desc=None, level_seven_desc=None, level_eight_desc=None):
         """Find the HighLevelViewTable row for a target branch/agency,
         preferring one that keeps the given designation-level descriptions
         (staff-level/grade/designation) so a branch or agency switch doesn't
         silently reset an employee's designation. Falls back to any row under
-        that branch/agency if no exact designation match exists."""
+        that branch/agency if no exact designation match exists. Agency/
+        designation names are matched via _normalize_org_name rather than
+        exact SQL equality, since Officekit's own data has inconsistent
+        spelling for the same name across branches."""
         cursor = self.conn.cursor(as_dict=True)
 
-        def _rows(with_designation):
-            conditions = []
-            params = []
-            if level_four_id is not None:
-                conditions.append("LevelFourId = %s")
-                params.append(level_four_id)
-            if level_five_id is not None:
-                conditions.append("LevelFiveId = %s")
-                params.append(level_five_id)
-            elif level_five_desc is not None:
-                conditions.append("LevelFiveDescription = %s")
-                params.append(level_five_desc)
-            if with_designation:
-                if level_six_desc is not None:
-                    conditions.append("LevelSixDescription = %s")
-                    params.append(level_six_desc)
-                if level_seven_desc is not None:
-                    conditions.append("LevelSevenDescription = %s")
-                    params.append(level_seven_desc)
-                if level_eight_desc is not None:
-                    conditions.append("LevelEightDescription = %s")
-                    params.append(level_eight_desc)
-            query = "SELECT * FROM HighLevelViewTable"
-            if conditions:
-                query += " WHERE " + " AND ".join(conditions)
-            cursor.execute(query, tuple(params))
-            return cursor.fetchall()
+        conditions = []
+        params = []
+        if level_four_id is not None:
+            conditions.append("LevelFourId = %s")
+            params.append(level_four_id)
+        if level_five_id is not None:
+            conditions.append("LevelFiveId = %s")
+            params.append(level_five_id)
+        query = "SELECT * FROM HighLevelViewTable"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
 
-        rows = _rows(with_designation=True)
-        if rows:
-            return rows[0], "exact"
+        if level_five_id is None and level_five_desc is not None:
+            target = self._normalize_org_name(level_five_desc)
+            rows = [r for r in rows if self._normalize_org_name(r.get("LevelFiveDescription")) == target]
 
-        rows = _rows(with_designation=False)
-        if rows:
-            return rows[0], "fallback"
+        if not rows:
+            return None, None
 
-        return None, None
+        if level_six_desc or level_seven_desc or level_eight_desc:
+            def _designation_matches(r):
+                for desc, key in (
+                    (level_six_desc, "LevelSixDescription"),
+                    (level_seven_desc, "LevelSevenDescription"),
+                    (level_eight_desc, "LevelEightDescription"),
+                ):
+                    if desc is not None and self._normalize_org_name(r.get(key)) != self._normalize_org_name(desc):
+                        return False
+                return True
+
+            exact_rows = [r for r in rows if _designation_matches(r)]
+            if exact_rows:
+                return exact_rows[0], "exact"
+
+        return rows[0], "fallback"
 
     def _apply_entity(self, emp_id, entity_row):
         cursor = self.conn.cursor(as_dict=True)

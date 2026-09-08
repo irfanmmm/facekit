@@ -354,6 +354,47 @@ def delete_employee_route():
     return jsonify({"message": "success"})
 
 
+@admin.route('/get-branch', methods=['POST'])
+@jwt_required
+@super_admin_required
+def admin_get_branch_route():
+    data = request.get_json() or {}
+    compony_code = data.get("compony_code")
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"}), 400
+
+    from admin.admin_service.componys import list_branches
+    result = list_branches(
+        compony_code,
+        search=data.get("search"),
+        offset=data.get("offset") or 1,
+        limit=data.get("limit") or 1000,
+    )
+
+    if result.get("error"):
+        return jsonify({"message": result["error"]}), 400
+
+    return jsonify({"message": "success", "details": result["data"]})
+
+
+@admin.route('/get-agency', methods=['POST'])
+@jwt_required
+@super_admin_required
+def admin_get_agency_route():
+    data = request.get_json() or {}
+    compony_code = data.get("compony_code")
+    if not compony_code:
+        return jsonify({"message": "compony_code is requerd"}), 400
+
+    from admin.admin_service.componys import list_agencies
+    result = list_agencies(compony_code, branch_id=data.get("branch_id"), search=data.get("search"))
+
+    if result.get("error"):
+        return jsonify({"message": result["error"]}), 400
+
+    return jsonify({"message": "success", "details": result["data"]})
+
+
 @admin.route('/switch-branch', methods=['POST'])
 @jwt_required
 @super_admin_required
